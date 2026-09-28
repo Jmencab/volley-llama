@@ -147,6 +147,23 @@ export function TeamProvider({ children }) {
     return () => { cancelled = true }
   }, [me, captainPass, autoPass, unlockCaptain])
 
+  // UTR ratings are for captains only. The table is unreadable from the browser;
+  // they arrive through a passcode-checked function once captain tools are
+  // unlocked, and go away again on lock.
+  const [ratings, setRatings] = useState({})
+  useEffect(() => {
+    if (!captainPass) { setRatings({}); return }
+    let cancelled = false
+    supabase.rpc('usta_captain_ratings', { p_pass: captainPass }).then(({ data, error: e }) => {
+      if (cancelled || e) return
+      const map = {}
+      for (const r of data || []) map[r.player_id] = r
+      setRatings(map)
+    })
+    return () => { cancelled = true }
+  }, [captainPass])
+  const ratingOf = useCallback((pid) => ratings[pid] || null, [ratings])
+
   const rpc = useCallback(async (fn, args) => {
     const { error: e } = await supabase.rpc(fn, { p_pass: captainPass, ...args })
     if (e) throw new Error(e.message)
@@ -156,7 +173,7 @@ export function TeamProvider({ children }) {
   const value = {
     players, matches, availability, lineups, loading, error, reload: load,
     me, myId, chooseMe, setAvail, availOf, lineupFor, saveProfile,
-    isCaptain: !!captainPass, captainPending, unlockCaptain, lockCaptain,
+    isCaptain: !!captainPass, captainPending, unlockCaptain, lockCaptain, ratingOf,
     saveLineup: (matchId, courts) => rpc('usta_save_lineup', { p_match_id: matchId, p_courts: courts }),
     saveResults: (matchId, results) => rpc('usta_save_results', { p_match_id: matchId, p_results: results }),
     publishLineup: (matchId, published) => rpc('usta_publish_lineup', { p_match_id: matchId, p_published: published }),

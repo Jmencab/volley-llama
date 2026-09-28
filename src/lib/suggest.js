@@ -5,8 +5,9 @@
 //   who plays  — yeses before maybes, then whoever has the fewest other chances
 //                this season and the fewest matches played (balance);
 //   where      — winning pairs stay together, a win moves you up a court and a
-//                loss moves you down, and the six get arranged to fit that.
-//                NTRP only breaks ties (early season, nobody has results yet).
+//                loss moves you down, and stronger pairs (by doubles UTR) take
+//                the lower-numbered courts. NTRP only breaks ties when a player
+//                has no UTR.
 // Nothing here is saved; the result lands in the draft for the captain to review.
 
 import { MAX_PAIR_NTRP, fmtNtrp, pairNtrp, pairOverCap } from './rules.js'
@@ -24,6 +25,22 @@ function subsets(arr, k) {
   }
   walk(0, [])
   return out
+}
+
+const median = (xs) => {
+  const s = xs.slice().sort((a, b) => a - b)
+  return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : null
+}
+
+// A doubles UTR the suggester can trust: the published number pulled toward the
+// team median for that gender in proportion to how unreliable UTR says it is
+// (a 24%-reliable 3.07 is mostly guesswork). null when the player has no UTR.
+export function utrStrength(rating, genderMedian) {
+  const utr = Number(rating?.utr_doubles)
+  if (!Number.isFinite(utr) || utr <= 0) return null
+  const rel = Math.min(100, Math.max(0, Number(rating?.utr_doubles_rel ?? 100))) / 100
+  const anchor = genderMedian ?? utr
+  return rel * utr + (1 - rel) * anchor
 }
 
 // Where a player's recent results say they belong, most recent weighted most.
@@ -45,7 +62,7 @@ export function courtLevel(plays, matchId) {
   return sum / wsum
 }
 
-export function suggestLineup({ matchId, players, statusOf, stats, elsewhere, nameOf }) {
+export function suggestLineup({ matchId, players, statusOf, stats, elsewhere, nameOf, utrOf = () => null }) {
   const first = (p) => nameOf(p.id).split(' ')[0]
   const names = (ps) => ps.map((p) => nameOf(p.id)).join(', ')
   const cap = fmtNtrp(MAX_PAIR_NTRP)
@@ -67,12 +84,27 @@ export function suggestLineup({ matchId, players, statusOf, stats, elsewhere, na
   const men = pool('M')
   const women = pool('F')
 
+  // The median is taken over the whole roster of that gender, so it doesn't
+  // swing with who happens to be available this week.
+  const genderMedian = (g) =>
+    median(players.filter((p) => p.gender === g).map((p) => Number(utrOf(p.id)?.utr_doubles)).filter((x) => Number.isFinite(x) && x > 0))
+  const medians = { M: genderMedian('M'), F: genderMedian('F') }
+  const strengths = new Map()
+  const strength = (p) => {
+    if (!strengths.has(p.id)) strengths.set(p.id, utrStrength(utrOf(p.id), medians[p.gender]))
+    return strengths.get(p.id)
+  }
+
   const levels = new Map()
   const level = (p) => {
     if (!levels.has(p.id)) levels.set(p.id, courtLevel(stats.forPlayer(p.id).plays, matchId))
     return levels.get(p.id)
   }
   const rating = (p) => Number(p.ntrp) || 3.0 // unknown rating = neutral
+  // A one-point gap in a pair's combined UTR, moved from D1 to D3, costs about as
+  // much as one player sitting a court away from their form — UTR is the
+  // stronger signal, so it should be able to override a mild form mismatch.
+  const UTR_PULL = 0.5
   // small enough that any real result outweighs it (form steps are >= 1/6)
   const RATING_PULL = 0.05
   const pairScores = new Map()
@@ -85,12 +117,19 @@ export function suggestLineup({ matchId, players, statusOf, stats, elsewhere, na
     }
     return pairScores.get(key)
   }
+  // With a UTR for both, the court-order pull comes from it; otherwise fall
+  // back to the faint NTRP pull so an unrated player still slots sensibly.
+  const courtPull = (court, m, w) => {
+    const sm = strength(m), sw = strength(w)
+    if (sm != null && sw != null) return UTR_PULL * court * (sm + sw)
+    return RATING_PULL * court * (rating(m) + rating(w))
+  }
 
   // Try every choice of up to three men and three women, every way to pair them
   // and every way to seat the pairs. Best means, in order: the most courts filled
   // with legal pairs, then the players who most need to play, then the seating
-  // that best fits partnerships and form. A team roster is small enough that
-  // brute force is instant.
+  // that best fits partnerships, form and strength. A team roster is small
+  // enough that brute force is instant.
   const kM = Math.min(3, men.length)
   const kW = Math.min(3, women.length)
   const beats = (a, b) =>
@@ -114,7 +153,7 @@ export function suggestLineup({ matchId, players, statusOf, stats, elsewhere, na
           for (const s of seated) {
             score += pairScore(s.m, s.w)
             score -= Math.abs(level(s.m) - s.court) + Math.abs(level(s.w) - s.court)
-            score -= RATING_PULL * s.court * (rating(s.m) + rating(s.w)) // higher-rated drift toward D1
+            score -= courtPull(s.court, s.m, s.w) // stronger pairs drift toward D1
           }
           const cand = { filled: pairs.length, cost, score, seated }
           if (beats(cand, best)) best = cand
@@ -166,6 +205,13 @@ export function suggestLineup({ matchId, players, statusOf, stats, elsewhere, na
     if (e.available === 1) return `${first(p)} can only make 1 other match`
     return null
   }
+  const utrNote = (p) => {
+    const r = utrOf(p.id)
+    const utr = Number(r?.utr_doubles)
+    if (!Number.isFinite(utr) || utr <= 0) return null
+    const rel = Number(r?.utr_doubles_rel ?? 100)
+    return `${first(p)} UTR ${utr.toFixed(2)}${rel < 90 ? ` (${rel}% reliable)` : ''}`
+  }
 
   const courts = COURTS.map((court) => {
     const s = byCourt.get(court)
@@ -181,13 +227,17 @@ export function suggestLineup({ matchId, players, statusOf, stats, elsewhere, na
     for (const p of [s.m, s.w]) {
       const f = formNote(p)
       if (f) bits.push(f)
+      const u = utrNote(p)
+      if (u) bits.push(u)
       else if (p.ntrp) bits.push(`${first(p)} is a ${fmtNtrp(p.ntrp)}`)
       const b = balanceNote(p)
       if (b) bits.push(b)
     }
     const total = pairNtrp(s.m, s.w)
+    const sm = strength(s.m), sw = strength(s.w)
+    const utrSum = sm != null && sw != null ? ` · UTR ${(sm + sw).toFixed(1)}` : ''
     return `D${court}: ${nameOf(s.m.id)} + ${nameOf(s.w.id)}` +
-      (total != null ? ` (${fmtNtrp(total)})` : '') +
+      (total != null ? ` (${fmtNtrp(total)}${utrSum})` : '') +
       (bits.length ? ' — ' + bits.join('; ') : '')
   })
 

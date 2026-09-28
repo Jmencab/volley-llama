@@ -15,7 +15,7 @@ export default function CaptainMatch() {
   const nav = useNavigate()
   const {
     matches, players, lineups, availOf, lineupFor,
-    saveLineup, saveResults, publishLineup, updateMatch,
+    saveLineup, saveResults, publishLineup, updateMatch, ratingOf,
   } = useTeam()
   const now = useNow()
   const stats = useMemo(() => buildStats({ matches, lineups, now }), [matches, lineups, now])
@@ -68,6 +68,16 @@ export default function CaptainMatch() {
   const active = players.filter((p) => p.active)
   const byId = (pid) => players.find((p) => p.id === pid)
   const statusOf = (pid) => availOf(match.id, pid) || 'none'
+
+  // Doubles UTR, captain-only (the store only has it once captain tools are
+  // unlocked). Reliability is shown when UTR itself says the number is shaky.
+  const utrText = (p) => {
+    const r = ratingOf(p?.id)
+    const utr = Number(r?.utr_doubles)
+    if (!Number.isFinite(utr) || utr <= 0) return null
+    const rel = r.utr_doubles_rel ?? 100
+    return `UTR ${utr.toFixed(2)}${rel < 90 ? ` (${rel}%)` : ''}`
+  }
 
   const assigned = draft.flatMap((c) => [c.player1_id, c.player2_id]).filter(Boolean)
   const complete = draft.every((c) => c.player1_id && c.player2_id)
@@ -124,7 +134,7 @@ export default function CaptainMatch() {
   const doSuggest = () => {
     const s = suggestLineup({
       matchId: match.id, players: active, statusOf, stats, elsewhere,
-      nameOf: (pid) => displayName(byId(pid)),
+      nameOf: (pid) => displayName(byId(pid)), utrOf: ratingOf,
     })
     setDraft(s.courts)
     setDirty(true)
@@ -276,6 +286,7 @@ export default function CaptainMatch() {
                       <span className="nm">{displayName(p)}</span>
                       <span className="tiny num">
                         {isRated(p) && `${fmtNtrp(p.ntrp)} · `}
+                        {utrText(p) && `${utrText(p)} · `}
                         {stats.playedExcept(p.id, match.id)} played · {statusOf(p.id) === 'none' ? 'no answer' : statusOf(p.id)}
                       </span>
                     </>
@@ -338,6 +349,7 @@ export default function CaptainMatch() {
           match={match} picking={picking} draft={draft} players={active} stats={stats}
           statusOf={statusOf}
           noteFor={others.length ? constraintLine : null}
+          utrText={utrText}
           onClose={() => setPicking(null)}
           onPick={(pid) => { setSlot(picking.court, picking.gender, pid); setPicking(null) }}
         />
@@ -368,7 +380,7 @@ function PairNote({ court, stats, matchId }) {
   return <span className="tiny num">played {pair.count}× · {recordShort(pair.wins, pair.losses)}</span>
 }
 
-function SlotSheet({ match, picking, draft, players, stats, statusOf, noteFor, onClose, onPick }) {
+function SlotSheet({ match, picking, draft, players, stats, statusOf, noteFor, utrText, onClose, onPick }) {
   const { court, gender } = picking
   const thisCourt = draft.find((c) => c.court === court)
   const mySlot = gender === 'M' ? 'player1_id' : 'player2_id'
@@ -403,7 +415,10 @@ function SlotSheet({ match, picking, draft, players, stats, statusOf, noteFor, o
   // what a candidate would total with the partner already on this court, when that breaks the cap
   const overWith = (p) => (partner && pairOverCap(p, partner) ? fmtNtrp(pairNtrp(p, partner)) : null)
   const withRating = (p) => (
-    <>{displayName(p)}{isRated(p) && <span className="tiny num"> {fmtNtrp(p.ntrp)}</span>}</>
+    <>
+      {displayName(p)}{isRated(p) && <span className="tiny num"> {fmtNtrp(p.ntrp)}</span>}
+      {utrText?.(p) && <span className="tiny num"> · {utrText(p)}</span>}
+    </>
   )
   const overNote = (total) => (
     <div className="tiny" style={{ color: 'var(--out)', fontWeight: 800 }}>

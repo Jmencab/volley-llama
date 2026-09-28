@@ -153,9 +153,31 @@ players and picks the best one by these priorities, in order:
 2. **Who most needs to play.** Yeses before maybes, then the fewest other chances
    this season, then the fewest matches played.
 3. **Where each pair plays.** Pairs with a winning record stay together, a win moves
-   a player up a court and a loss moves them down, and NTRP breaks ties.
+   a player up a court and a loss moves them down, and stronger pairs (by doubles
+   UTR) take the lower-numbered courts. NTRP only breaks ties for players with no
+   UTR.
 
 The suggestion fills the draft so the captain can review it before saving.
+
+### UTR ratings (captains only)
+
+Each player's UTR (singles and doubles, with UTR's own reliability percentage)
+lives in `usta_player_ratings`, a table the browser cannot read at all. Once
+captain tools are unlocked, the app fetches it through the password-checked
+`usta_captain_ratings` function and shows doubles UTR on the lineup slot cards
+and in the player picker, with the reliability figure when it's under 90%. The
+auto-suggest uses it too, shrinking an unreliable number toward the team's
+median for that gender. Players never see it; the Stats tab doesn't show it.
+
+There's no screen for editing ratings yet. To update them, run this in the
+Supabase SQL editor (blank reliability defaults to 100%):
+
+```sql
+update public.usta_player_ratings r
+   set utr_doubles = 1.78, utr_doubles_rel = 100, updated_at = now()
+  from public.usta_players p
+ where p.id = r.player_id and p.name = 'First Last';
+```
 
 ## Captain operations
 
