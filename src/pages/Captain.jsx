@@ -185,7 +185,8 @@ function AddPlayerSheet({ onClose, addPlayer }) {
       await addPlayer({ name: name.trim(), gender, ntrp: ntrp ? Number(ntrp) : null, phone: phone.trim() })
       onClose()
     } catch (e2) {
-      setErr(e2.message)
+      // roster names are unique; Postgres' wording for that isn't for humans
+      setErr(/duplicate key|23505/.test(e2.message) ? 'Someone with that name is already on the roster.' : e2.message)
     } finally {
       setBusy(false)
     }
