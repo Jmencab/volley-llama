@@ -154,21 +154,37 @@ begin
    where id = p_match_id;
 end $$;
 
+-- Captains add players from the app. Every real player has a USTA number, so
+-- the function takes one; blank means "not known yet". A repeated name is
+-- caught case-insensitively with a human message.
 create or replace function public.usta_upsert_player(
-  p_pass text, p_id uuid, p_name text, p_gender text, p_ntrp numeric, p_phone text, p_active boolean)
+  p_pass text, p_id uuid, p_name text, p_gender text, p_ntrp numeric, p_phone text, p_active boolean,
+  p_usta_number text default null)
 returns uuid language plpgsql security definer set search_path = public as $$
-declare v_id uuid;
+declare
+  v_id   uuid;
+  v_name text := btrim(coalesce(p_name, ''));
+  v_usta text := nullif(btrim(coalesce(p_usta_number, '')), '');
 begin
   if not public.usta_check_pass(p_pass) then raise exception 'unauthorized'; end if;
+
   if p_id is null then
-    insert into public.usta_players (name, gender, ntrp, phone, active, sort_order)
-    values (p_name, p_gender, p_ntrp, p_phone, coalesce(p_active, true),
+    if v_name = '' then raise exception 'Give them a name.'; end if;
+    if exists (select 1 from public.usta_players where lower(name) = lower(v_name)) then
+      raise exception 'Someone with that name is already on the roster.';
+    end if;
+    insert into public.usta_players (name, gender, ntrp, phone, usta_number, active, sort_order)
+    values (v_name, p_gender, p_ntrp, nullif(btrim(coalesce(p_phone, '')), ''), v_usta, coalesce(p_active, true),
             coalesce((select max(sort_order) + 1 from public.usta_players), 0))
     returning id into v_id;
   else
     update public.usta_players
-       set name = coalesce(nullif(p_name,''), name), gender = coalesce(nullif(p_gender,''), gender),
-           ntrp = coalesce(p_ntrp, ntrp), phone = p_phone, active = coalesce(p_active, active)
+       set name        = coalesce(nullif(v_name, ''), name),
+           gender      = coalesce(nullif(p_gender, ''), gender),
+           ntrp        = coalesce(p_ntrp, ntrp),
+           phone       = p_phone,
+           usta_number = coalesce(v_usta, usta_number),
+           active      = coalesce(p_active, active)
      where id = p_id returning id into v_id;
   end if;
   return v_id;
@@ -225,7 +241,7 @@ grant execute on function public.usta_save_lineup(text, uuid, jsonb) to anon, au
 grant execute on function public.usta_save_results(text, uuid, jsonb) to anon, authenticated;
 grant execute on function public.usta_publish_lineup(text, uuid, boolean) to anon, authenticated;
 grant execute on function public.usta_update_match(text, uuid, timestamptz, text, text) to anon, authenticated;
-grant execute on function public.usta_upsert_player(text, uuid, text, text, numeric, text, boolean) to anon, authenticated;
+grant execute on function public.usta_upsert_player(text, uuid, text, text, numeric, text, boolean, text) to anon, authenticated;
 grant execute on function public.usta_set_captain_pass(text, text) to anon, authenticated;
 
 -- ============================ 4. realtime ============================

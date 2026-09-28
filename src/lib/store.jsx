@@ -165,6 +165,7 @@ export function TeamProvider({ children }) {
     addPlayer: (fields) => rpc('usta_upsert_player', {
       p_id: null, p_name: fields.name, p_gender: fields.gender,
       p_ntrp: fields.ntrp ?? null, p_phone: fields.phone || null, p_active: true,
+      p_usta_number: fields.ustaNumber || null,
     }),
   }
 

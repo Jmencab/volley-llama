@@ -174,6 +174,7 @@ function AddPlayerSheet({ onClose, addPlayer }) {
   const [gender, setGender] = useState('F')
   const [ntrp, setNtrp] = useState('')
   const [phone, setPhone] = useState('')
+  const [ustaNumber, setUstaNumber] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
@@ -182,7 +183,7 @@ function AddPlayerSheet({ onClose, addPlayer }) {
     if (!name.trim()) { setErr('Give them a name.'); return }
     setBusy(true); setErr('')
     try {
-      await addPlayer({ name: name.trim(), gender, ntrp: ntrp ? Number(ntrp) : null, phone: phone.trim() })
+      await addPlayer({ name: name.trim(), gender, ntrp: ntrp ? Number(ntrp) : null, phone: phone.trim(), ustaNumber: ustaNumber.trim() })
       onClose()
     } catch (e2) {
       // roster names are unique; Postgres' wording for that isn't for humans
@@ -219,6 +220,12 @@ function AddPlayerSheet({ onClose, addPlayer }) {
           <div className="eyebrow" style={{ marginBottom: 6 }}>NTRP</div>
           <input type="number" inputMode="decimal" step="0.5" min="1" max="7" value={ntrp}
                  placeholder="Optional, e.g. 3.5" onChange={(e) => setNtrp(e.target.value)} />
+        </div>
+
+        <div>
+          <div className="eyebrow" style={{ marginBottom: 6 }}>USTA number</div>
+          <input type="text" inputMode="numeric" value={ustaNumber} placeholder="Optional, e.g. 2019123456"
+                 autoComplete="off" onChange={(e) => setUstaNumber(e.target.value.replace(/\D/g, ''))} />
         </div>
 
         <div>

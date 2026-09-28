@@ -170,14 +170,10 @@ entering the password.
 **Reschedule a match.** Captain → the match → **Match details → Edit** lets you
 change the date, site, and team note. No deploy needed.
 
-**Add a player.** There's no screen for this yet. Run this in the Supabase SQL
-editor; the app picks it up on the next load, no deploy needed.
-
-```sql
-insert into public.usta_players (name, gender, ntrp, usta_number, phone, sort_order)
-values ('First Last', 'F', 3.0, '2019000000', '206-555-0100',
-        (select coalesce(max(sort_order), 0) + 1 from public.usta_players));
-```
+**Add a player.** Captain → **Roster → Add player**: name, woman/man, NTRP,
+USTA number, phone. Everyone's roster updates immediately (it goes through the
+password-checked `usta_upsert_player` function). A name already on the roster
+is refused.
 
 **Change the captain password.** Run this in the Supabase SQL editor, then put
 the new value in `.env.local` and redeploy so captains stay auto-unlocked.
