@@ -1,15 +1,16 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useTeam, useNow } from '../lib/store'
 import { buildStats, recordShort } from '../lib/stats'
-import { DateChip, NEED_PER_GENDER, availableByGender, displayName } from '../components/ui'
+import { DateChip, NEED_PER_GENDER, Sheet, availableByGender, displayName } from '../components/ui'
 import { monthDay, isPastMatch } from '../lib/dates'
 
 export default function Captain() {
-  const { matches, players, lineups, availOf, lineupFor, lockCaptain } = useTeam()
+  const { matches, players, lineups, availOf, lineupFor, lockCaptain, addPlayer } = useTeam()
   const nav = useNavigate()
   const now = useNow()
   const stats = useMemo(() => buildStats({ matches, lineups, now }), [matches, lineups, now])
+  const [adding, setAdding] = useState(false)
 
   const active = players.filter((p) => p.active)
   const upcoming = matches.filter((m) => !isPastMatch(m, now))
@@ -49,6 +50,9 @@ export default function Captain() {
         </div>
         <button className="btn sm ghost" onClick={() => { lockCaptain(); nav('/') }}>Lock</button>
       </div>
+
+      <div className="section"><h2 className="h2">Roster</h2></div>
+      <button className="btn wide" onClick={() => setAdding(true)}>Add player</button>
 
       <div className="section"><h2 className="h2">Coming up</h2></div>
       <div className="stack stagger">
@@ -159,6 +163,74 @@ export default function Captain() {
           </div>
         </>
       )}
+
+      {adding && <AddPlayerSheet onClose={() => setAdding(false)} addPlayer={addPlayer} />}
     </div>
+  )
+}
+
+function AddPlayerSheet({ onClose, addPlayer }) {
+  const [name, setName] = useState('')
+  const [gender, setGender] = useState('F')
+  const [ntrp, setNtrp] = useState('')
+  const [phone, setPhone] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const submit = async (e) => {
+    e.preventDefault()
+    if (!name.trim()) { setErr('Give them a name.'); return }
+    setBusy(true); setErr('')
+    try {
+      await addPlayer({ name: name.trim(), gender, ntrp: ntrp ? Number(ntrp) : null, phone: phone.trim() })
+      onClose()
+    } catch (e2) {
+      setErr(e2.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Sheet title="Add player" onClose={onClose}>
+      <form onSubmit={submit} className="stack mt">
+        <div>
+          <div className="eyebrow" style={{ marginBottom: 6 }}>Name</div>
+          <input type="text" value={name} autoFocus placeholder="Full name"
+                 onChange={(e) => setName(e.target.value)} />
+        </div>
+
+        <div>
+          <div className="eyebrow" style={{ marginBottom: 6 }}>Plays as</div>
+          <div className="seg">
+            {[['F', 'Woman'], ['M', 'Man']].map(([g, label]) => (
+              <button key={g} type="button"
+                      className={`seg-btn ${gender === g ? 'on' : ''}`}
+                      aria-pressed={gender === g}
+                      onClick={() => setGender(g)}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="eyebrow" style={{ marginBottom: 6 }}>NTRP</div>
+          <input type="number" inputMode="decimal" step="0.5" min="1" max="7" value={ntrp}
+                 placeholder="Optional, e.g. 3.5" onChange={(e) => setNtrp(e.target.value)} />
+        </div>
+
+        <div>
+          <div className="eyebrow" style={{ marginBottom: 6 }}>Phone</div>
+          <input type="tel" inputMode="tel" value={phone} placeholder="Optional"
+                 autoComplete="tel" onChange={(e) => setPhone(e.target.value)} />
+        </div>
+
+        {err && <div className="notice bad">{err}</div>}
+        <button className="btn primary wide" disabled={busy || !name.trim()}>
+          {busy ? 'Adding…' : 'Add to roster'}
+        </button>
+      </form>
+    </Sheet>
   )
 }

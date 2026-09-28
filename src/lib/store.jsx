@@ -162,6 +162,10 @@ export function TeamProvider({ children }) {
     publishLineup: (matchId, published) => rpc('usta_publish_lineup', { p_match_id: matchId, p_published: published }),
     updateMatch: (matchId, startsAt, site, notes) =>
       rpc('usta_update_match', { p_match_id: matchId, p_starts_at: startsAt, p_site: site, p_notes: notes }),
+    addPlayer: (fields) => rpc('usta_upsert_player', {
+      p_id: null, p_name: fields.name, p_gender: fields.gender,
+      p_ntrp: fields.ntrp ?? null, p_phone: fields.phone || null, p_active: true,
+    }),
   }
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
