@@ -189,9 +189,10 @@ export function TeamProvider({ children }) {
   }, [me, captainPass, autoPass, unlockCaptain])
 
   const rpc = useCallback(async (fn, args) => {
-    const { error: e } = await supabase.rpc(fn, { p_pass: captainPass, ...args })
+    const { data, error: e } = await supabase.rpc(fn, { p_pass: captainPass, ...args })
     if (e) throw new Error(e.message)
     await Promise.all([load(), loadPractice()])
+    return data
   }, [captainPass, load, loadPractice])
 
   const value = {
@@ -208,12 +209,14 @@ export function TeamProvider({ children }) {
       p_id: null, p_name: fields.name, p_gender: fields.gender,
       p_ntrp: fields.ntrp ?? null, p_phone: fields.phone || null, p_active: true,
     }),
+    // Anyone can post a practice; the database lets its poster or a captain
+    // change it. Resolves to the practice id.
     savePractice: (id, f) => rpc('usta_save_practice', {
-      p_id: id, p_starts_at: f.startsAt, p_minutes: f.minutes, p_site: f.site,
+      p_player_id: myId, p_id: id, p_starts_at: f.startsAt, p_minutes: f.minutes, p_site: f.site,
       p_courts: f.courts ?? null, p_notes: f.notes || null,
     }),
-    cancelPractice: (id, cancelled) => rpc('usta_cancel_practice', { p_id: id, p_cancelled: cancelled }),
-    deletePractice: (id) => rpc('usta_delete_practice', { p_id: id }),
+    cancelPractice: (id, cancelled) => rpc('usta_cancel_practice', { p_player_id: myId, p_id: id, p_cancelled: cancelled }),
+    deletePractice: (id) => rpc('usta_delete_practice', { p_player_id: myId, p_id: id }),
   }
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

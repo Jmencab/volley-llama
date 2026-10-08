@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useTeam, useNow } from '../lib/store'
+import { teamLink } from '../lib/identity'
 import { DateChip, NameTip, Sheet, Toast, copyText, displayName, firstName, mapsUrl } from '../components/ui'
 import CourtFinder from '../components/CourtFinder'
 import { dayName, monthDay, pacificOffset, relativeShort, timeOf, timeRange, toLocalInput } from '../lib/dates'
@@ -14,7 +16,7 @@ export default function Practice() {
   } = useTeam()
   const now = useNow()
   const [editing, setEditing] = useState(null) // {} for new, a practice to edit
-  const [texting, setTexting] = useState(null)
+  const [sharingId, setSharingId] = useState(null)
   const [toast, setToast] = useState('')
   const [courts, setCourts] = useState([])
 
@@ -28,8 +30,22 @@ export default function Practice() {
   // just means no lights warnings; the finder shows the error itself.
   useEffect(() => { loadCourts().then(setCourts).catch(() => {}) }, [])
 
+  // A shared link (/practice?p=<id>) lands on that practice, highlighted.
+  const [params] = useSearchParams()
+  const linked = params.get('p')
+  useEffect(() => {
+    if (!linked || !practices.some((p) => p.id === linked)) return
+    // after the shell's scroll-to-top on navigation
+    const t = setTimeout(() => {
+      document.getElementById(`practice-${linked}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 350)
+    return () => clearTimeout(t)
+  }, [linked, practices])
+
   const upcoming = practices.filter((p) => !isPastPractice(p, now))
   const nameOf = (id) => displayName(players.find((p) => p.id === id)) || '—'
+  const courtFor = (p) => courts.find((c) => sameSite(c.name, p.site))
+  const sharing = practices.find((p) => p.id === sharingId)
 
   return (
     <div className="app">
@@ -38,7 +54,7 @@ export default function Practice() {
           <div className="eyebrow">Between matches</div>
           <h1 className="h1">Practice</h1>
         </div>
-        {isCaptain && !practiceError && (
+        {!practiceError && (
           <button className="btn sm primary" onClick={() => setEditing({})}>New practice</button>
         )}
       </div>
@@ -53,7 +69,7 @@ export default function Practice() {
           <div style={{ fontSize: 30 }}>🎾</div>
           <h2 className="h2 mt">Nothing on the calendar</h2>
           <p className="sub">
-            {isCaptain ? 'Tap New practice to put one up, or find a court below.' : 'When a captain posts a practice, sign up here.'}
+            Tap New practice to put one up and share it on WhatsApp, or find a court below.
           </p>
         </div>
       ) : (
@@ -62,11 +78,13 @@ export default function Practice() {
             <PracticeCard
               key={p.id} practice={p} now={now} me={me} nameOf={nameOf}
               roster={practiceRoster(p, signups)}
-              court={courts.find((c) => sameSite(c.name, p.site))}
-              isCaptain={isCaptain}
+              court={courtFor(p)}
+              highlight={p.id === linked}
+              canEdit={isCaptain || p.created_by === me.id}
+              postedBy={p.created_by && p.created_by !== me.id ? firstName(nameOf(p.created_by)) : null}
               onSignup={(status) => setSignup(p.id, me.id, status)}
               onEdit={() => setEditing(p)}
-              onText={() => setTexting(p)}
+              onShare={() => setSharingId(p.id)}
             />
           ))}
         </div>
@@ -81,7 +99,7 @@ export default function Practice() {
           await reportLights(court, ok, me.id)
           setToast('Thanks — the team will see it')
         }}
-        onUse={isCaptain && !practiceError ? (c) => setEditing({ site: c.name }) : null}
+        onUse={!practiceError ? (c) => setEditing({ site: c.name }) : null}
       />
 
       {editing && (
@@ -89,9 +107,11 @@ export default function Practice() {
           practice={editing} courts={courts}
           onClose={() => setEditing(null)}
           onSave={async (fields) => {
-            await savePractice(editing.id || null, fields)
+            const id = await savePractice(editing.id || null, fields)
             setEditing(null)
-            setToast(editing.id ? 'Practice updated' : 'Practice posted — send the group text')
+            // a new practice goes straight to the share step
+            if (editing.id) setToast('Practice updated')
+            else setSharingId(id)
           }}
           onCancel={editing.id ? async () => {
             await cancelPractice(editing.id, !editing.cancelled)
@@ -106,9 +126,9 @@ export default function Practice() {
         />
       )}
 
-      {texting && (
-        <TextSheet practice={texting} roster={practiceRoster(texting, signups)} nameOf={nameOf}
-                   onClose={() => setTexting(null)} setToast={setToast} />
+      {sharing && (
+        <ShareSheet practice={sharing} court={courtFor(sharing)} roster={practiceRoster(sharing, signups)}
+                    nameOf={nameOf} onClose={() => setSharingId(null)} setToast={setToast} />
       )}
 
       <Toast>{toast}</Toast>
@@ -116,7 +136,7 @@ export default function Practice() {
   )
 }
 
-// Captains type the site freely, so "Jefferson Park" and "jefferson park courts"
+// People type the site freely, so "Jefferson Park" and "jefferson park courts"
 // should both find the city's "Jefferson Park".
 const norm = (s) => (s || '').toLowerCase().replace(/\(.*?\)|tennis|courts?|[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
 const sameSite = (cityName, site) => {
@@ -135,7 +155,7 @@ function lightsNote(start, end, court) {
   return { level: 'warn', text: `🌙 Sunset is ${set}; make sure this court has lights` }
 }
 
-function PracticeCard({ practice: p, now, me, roster, court, nameOf, isCaptain, onSignup, onEdit, onText }) {
+function PracticeCard({ practice: p, now, me, roster, court, nameOf, highlight, canEdit, postedBy, onSignup, onEdit, onShare }) {
   const start = practiceStart(p)
   const end = practiceEnd(p)
   const mine = roster.playing.includes(me.id) ? 'in'
@@ -150,7 +170,7 @@ function PracticeCard({ practice: p, now, me, roster, court, nameOf, isCaptain, 
     : `${roster.playing.length} in`
 
   return (
-    <div className={`card mcard ${p.cancelled ? 'done' : ''}`}>
+    <div id={`practice-${p.id}`} className={`card mcard ${p.cancelled ? 'done' : ''} ${highlight ? 'linked' : ''}`}>
       <div className="mrow-link">
         <div className="mrow">
           <DateChip date={start} />
@@ -177,6 +197,7 @@ function PracticeCard({ practice: p, now, me, roster, court, nameOf, isCaptain, 
 
         {!p.cancelled && <div className={`tiny lights-report ${sky.level}`}>{sky.text}</div>}
         {p.notes && <div className="tiny" style={{ marginTop: 6, color: 'var(--text)' }}>{p.notes}</div>}
+        {postedBy && <div className="tiny" style={{ marginTop: 6 }}>Posted by {postedBy}</div>}
         {roster.waitlist.length > 0 && (
           <div className="tiny" style={{ marginTop: 6 }}>Waitlist: {roster.waitlist.map((id) => firstName(nameOf(id))).join(', ')}</div>
         )}
@@ -194,12 +215,10 @@ function PracticeCard({ practice: p, now, me, roster, court, nameOf, isCaptain, 
         </div>
       )}
 
-      {isCaptain && (
-        <div className="row" style={{ gap: 6, padding: '0 10px 10px' }}>
-          <button className="btn sm ghost grow" onClick={onText}>Group text</button>
-          <button className="btn sm ghost grow" onClick={onEdit}>Edit</button>
-        </div>
-      )}
+      <div className="row" style={{ gap: 6, padding: '0 10px 10px' }}>
+        <button className="btn sm ghost grow" onClick={onShare}>Share</button>
+        {canEdit && <button className="btn sm ghost grow" onClick={onEdit}>Edit</button>}
+      </div>
     </div>
   )
 }
@@ -308,28 +327,53 @@ function PracticeSheet({ practice, courts, onClose, onSave, onCancel, onDelete }
   )
 }
 
-function TextSheet({ practice: p, roster, nameOf, onClose, setToast }) {
+// WhatsApp renders *text* as bold. Everything a teammate needs to decide and
+// show up: when, where (with a map), whether it'll be dark, and the sign-up link.
+function shareText(p, court, roster, nameOf) {
   const start = practiceStart(p)
-  const link = `${window.location.origin}/practice`
-  const text = [
-    p.cancelled
-      ? `Practice ${dayName(start)} ${monthDay(start)} at ${p.site} is cancelled.`
-      : `Practice ${dayName(start)} ${monthDay(start)}, ${timeRange(start, practiceEnd(p))} at ${p.site}` +
-        (p.courts ? ` (${p.courts} ${p.courts === 1 ? 'court' : 'courts'})` : '') + '.',
-    p.notes || null,
-    !p.cancelled && roster.playing.length ? `In so far: ${roster.playing.map((id) => firstName(nameOf(id))).join(', ')}` : null,
-    !p.cancelled ? `Sign up: ${link}` : null,
-  ].filter(Boolean).join('\n')
+  const end = practiceEnd(p)
+  const when = `${dayName(start)} ${monthDay(start)}, ${timeRange(start, end)}`
+  if (p.cancelled) return `\u274C *Practice cancelled*: ${when} at ${p.site}`
+
+  const where = court?.address ? `${p.site}, ${court.address}` : p.site
+  const dark = minutesAfterSunset(start, end)
+  const lights = !dark ? null
+    : court?.lights ? `\u{1F4A1} Lit courts (sunset ${timeOf(sunsetOn(start))})`
+    : court ? `\u{1F311} Heads up: no lights here, sunset ${timeOf(sunsetOn(start))}`
+    : `\u{1F319} Sunset ${timeOf(sunsetOn(start))}`
+  const spots = roster.cap ? Math.max(0, roster.cap - roster.playing.length) : null
+  const inSoFar = roster.playing.map((id) => firstName(nameOf(id)))
+
+  return [
+    `\u{1F3BE} *Practice: ${when}*`,
+    `\u{1F4CD} ${where}${p.courts ? ` (${p.courts} ${p.courts === 1 ? 'court' : 'courts'})` : ''}`,
+    mapsUrl(where),
+    lights,
+    p.notes ? `\u{1F4DD} ${p.notes}` : null,
+    '',
+    inSoFar.length ? `In so far: ${inSoFar.join(', ')}` : null,
+    spots === null ? null : spots > 0 ? `${spots} ${spots === 1 ? 'spot' : 'spots'} left` : 'Full; sign up for the waitlist',
+    `Sign up: ${teamLink(`/practice?p=${p.id}`)}`,
+  ].filter((line) => line !== null).join('\n')
+}
+
+function ShareSheet({ practice, court, roster, nameOf, onClose, setToast }) {
+  const text = shareText(practice, court, roster, nameOf)
   const selectAll = (e) => e.target.select()
 
   return (
-    <Sheet title="Group text" onClose={onClose}>
-      <textarea readOnly rows={5} value={text} onFocus={selectAll} onClick={selectAll} />
-      <button className="btn primary wide mt" onClick={async () => {
+    <Sheet title="Share with the team" onClose={onClose}>
+      <textarea readOnly rows={8} value={text} onFocus={selectAll} onClick={selectAll} />
+      {/* wa.me opens the WhatsApp app (or WhatsApp Web) with the message filled in; you pick the group */}
+      <a className="btn primary wide mt" href={`https://wa.me/?text=${encodeURIComponent(text)}`}
+         target="_blank" rel="noreferrer" onClick={() => setTimeout(onClose, 300)}>
+        Send on WhatsApp
+      </a>
+      <button className="btn wide ghost mt" onClick={async () => {
         const ok = await copyText(text)
-        setToast(ok ? 'Practice copied' : "Couldn't copy — select the text and copy it by hand")
+        setToast(ok ? 'Copied' : "Couldn't copy — select the text and copy it by hand")
         if (ok) onClose()
-      }}>Copy to clipboard</button>
+      }}>Copy text instead</button>
     </Sheet>
   )
 }

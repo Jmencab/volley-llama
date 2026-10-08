@@ -21,7 +21,7 @@ Built with React + Vite, Supabase, and Netlify.
 
 - **Home**: the next match, whether you're in the lineup, and a one-tap availability picker.
 - **Schedule**: every match with time, site, and home/away. Answer *Available / Maybe / Out* right from the list.
-- **Practice**: sign up for practices (first come, first served; extra sign-ups go on a waitlist) and find a Seattle court, with which ones have lights and whether a teammate says the lights actually worked last time.
+- **Practice**: anyone can post a practice and share it to the team's WhatsApp group with the court, a map link, and a sign-up link. Sign-ups are first come, first served, and extras go on a waitlist. There's also a court finder for Seattle courts, with which ones have lights and whether a teammate says the lights actually worked last time.
 - **Stats**: team record, results by court, a player leaderboard, best partnerships, and each player's match log.
 - No accounts. Pick your name once; update your details any time from **Stats → Edit my details**.
 
@@ -31,7 +31,7 @@ Built with React + Vite, Supabase, and Netlify.
 - A red **!** on any upcoming match that doesn't have enough yeses to field a lineup.
 - A lineup builder for three courts (one man and one woman each) that flags maybes, no-answers, dropouts, and any pair over the **6.0 combined NTRP** limit.
 - **Auto-suggest**, which drafts a legal lineup and explains its choices. See [Lineups](#lineups).
-- Post practices from **Practice → New practice**: pick a court, length, and how many courts you booked. The app warns when a practice runs past sunset at a court without lights, and copies a sign-up message for the group text.
+- Edit, cancel, or delete any practice. Players can only change the ones they posted.
 - Post the lineup to the team, copy it as a group text, send a nudge to anyone who hasn't answered, enter scores, and edit match details.
 
 ## Getting started
@@ -139,6 +139,11 @@ Everything lives in Supabase, in tables prefixed `usta_`.
 
 ### Practices and courts
 
+- **Anyone can post; the poster or a captain can change it.** The database
+  checks this (`usta_can_edit_practice`), using the name picked on the device,
+  the same trust model as availability.
+- **Share** opens WhatsApp (`wa.me`) with the message filled in; you pick the
+  group. The sign-up link includes the team password and opens that practice.
 - **Capacity is four per booked court.** Sign-ups beyond that go on a waitlist in
   the order people tapped *I'm in*.
 - **The court list comes straight from Seattle Parks' GIS layer**

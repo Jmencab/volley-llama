@@ -771,3 +771,4 @@ input:focus, textarea:focus, select:focus {
 .finder-filters .chip { min-height: 36px; }
 .finder-area { width: auto; min-height: 36px; padding: 5px 11px; border-radius: 999px; font-size: 12.5px; font-weight: 800; border-width: 1.5px; }
 .finder-actions { flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.card.linked { border-color: var(--accent-deep); box-shadow: 0 0 0 4px var(--accent-soft), var(--sh); }
