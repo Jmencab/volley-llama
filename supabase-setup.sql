@@ -266,7 +266,7 @@ create table if not exists public.usta_practices (
   starts_at  timestamptz not null,
   minutes    int not null default 90 check (minutes between 30 and 360),
   site       text not null,
-  courts     smallint check (courts between 1 and 20),  -- courts booked; caps sign-ups at 4 per court
+  courts     smallint check (courts between 1 and 20),  -- courts booked; the app aims for 4 players per court
   notes      text,
   cancelled  boolean not null default false,
   created_by uuid references public.usta_players(id) on delete set null,
@@ -274,8 +274,7 @@ create table if not exists public.usta_practices (
 );
 alter table public.usta_practices add column if not exists created_by uuid references public.usta_players(id) on delete set null;
 
--- One row per player per practice. Order of arrival (updated_at) decides who's
--- in and who's on the waitlist once the courts are full.
+-- One row per player per practice. No cap: everyone who says "in" is in.
 create table if not exists public.usta_practice_signups (
   practice_id uuid not null references public.usta_practices(id) on delete cascade,
   player_id   uuid not null references public.usta_players(id) on delete cascade,
@@ -297,9 +296,9 @@ create table if not exists public.usta_court_reports (
 create index if not exists usta_signups_practice_idx on public.usta_practice_signups(practice_id);
 create index if not exists usta_court_reports_court_idx on public.usta_court_reports(court, reported_at desc);
 
--- Place in line comes from the database clock, not the phone's, so a phone whose
--- clock is off (or a hand-edited request) can't jump the waitlist. Re-saving the
--- same answer keeps your spot; changing it sends you to the back.
+-- Answer order comes from the database clock, not the phone's, so a phone whose
+-- clock is off (or a hand-edited request) can't reorder the list. Re-saving the
+-- same answer keeps your place; changing it moves you to the end.
 create or replace function public.usta_signup_stamp()
 returns trigger language plpgsql set search_path = public as $$
 begin
