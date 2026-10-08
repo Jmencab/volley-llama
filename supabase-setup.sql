@@ -256,9 +256,10 @@ alter publication supabase_realtime add table public.usta_matches;
 --   update public.usta_matches set lineup_published = false;
 
 -- ============================ 6. practices ============================
--- Added 2026-10. Safe to re-run: paste this whole section into the Supabase SQL
--- editor once. Until it runs, the app's Practice tab says the setup is missing
--- and everything else works as before.
+-- Added 2026-10; applied to the live database 2026-10-08 (migration
+-- usta_practices_and_court_reports). Safe to re-run: paste this whole section
+-- into the Supabase SQL editor. Until it runs, the app's Practice tab says the
+-- setup is missing and everything else works as before.
 
 create table if not exists public.usta_practices (
   id         uuid primary key default gen_random_uuid(),

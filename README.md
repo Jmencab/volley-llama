@@ -94,7 +94,7 @@ src/
     ├── nav.js           Tab order, used for page-slide direction
     └── supabase.js      Supabase client
 
-supabase-setup.sql       Schema, row-level security, captain functions
+supabase-setup.sql       Schema, row-level security, and database functions
 netlify.toml             Build settings and SPA redirect
 .env.example             The Supabase settings needed to run locally (no values)
 ```
@@ -124,7 +124,7 @@ Everything lives in Supabase, in tables prefixed `usta_`.
 | `usta_availability` | One row per player per match: `available`, `maybe`, or `out` |
 | `usta_lineups` | One row per match per court: the pair, `won`, and `score` |
 | `usta_practices` | Practices: time, length, site, courts booked, note, cancelled |
-| `usta_practice_signups` | One row per player per practice: `in` or `out`; `updated_at` is their place in line |
+| `usta_practice_signups` | One row per player per practice: `in` or `out`; `updated_at` (set by the database) is their place in line |
 | `usta_court_reports` | Teammates' "lights worked / lights out" reports, by city court name |
 | `usta_config` | The captain password hash (no browser access) |
 
@@ -132,24 +132,33 @@ Everything lives in Supabase, in tables prefixed `usta_`.
   and court history. Entering scores after each match is the only upkeep. A lineup
   counts toward play totals once the match starts or the lineup is posted; a draft
   for a future match doesn't.
-- **Changes sync live.** Availability, lineups, and match edits update on every open
-  phone through Supabase Realtime.
+- **Changes sync live.** Availability, lineups, match edits, practices, sign-ups, and
+  lights reports update on every open phone through Supabase Realtime.
 - **Names:** `usta_players.name` is the official USTA roster name. The app shows
   `preferred_name` when one is set, through `displayName()` in `src/components/ui.jsx`.
 
 ### Practices and courts
 
 - **Anyone can post; the poster or a captain can change it.** The database
-  checks this (`usta_can_edit_practice`), using the name picked on the device,
-  the same trust model as availability.
+  checks this (`usta_can_edit_practice`) against the name picked on the device.
+  Like availability, that's an honor system: someone who picks a teammate's
+  name can act as them.
 - **Share** opens WhatsApp (`wa.me`) with the message filled in; you pick the
   group. The sign-up link includes the team password and opens that practice.
 - **Capacity is four per booked court.** Sign-ups beyond that go on a waitlist in
-  the order people tapped *I'm in*.
+  the order people said *I'm in*. The database stamps that time itself (the
+  `usta_signup_stamp` trigger), so a phone with a wrong clock can't change anyone's
+  place. Tapping the same answer again keeps your spot; changing it sends you to
+  the back of the line.
 - **The court list comes straight from Seattle Parks' GIS layer**
   (`Tennis_Courts` on services.arcgis.com, refreshed weekly by the city). Its
   `LIGHTS` field says which sites have lights. Nothing official says whether the
   lights are *working*, so teammates report that from the court finder.
+- **A typed site only counts as a city court when the match is unambiguous.**
+  Some parks are split into separately lit sites: Volunteer Park and Woodland Park
+  each have lit lower courts and unlit upper courts. So "Volunteer Park" gets a
+  general "make sure this court has lights" note, while picking the exact name
+  from the suggestions gives the real answer.
 - **Court availability isn't in the app.** The city's booking system (ActiveNet)
   and its availability dashboard have no API a browser can call, so each court
   links out to **Book**, and the finder links to the city's availability dashboard.
@@ -224,9 +233,10 @@ USTA number, phone. Everyone's roster updates immediately (it goes through the
 password-checked `usta_upsert_player` function). A name already on the roster
 is refused.
 
-**Set up practices (once).** Run section 6 of `supabase-setup.sql` in the
-Supabase SQL editor. It's safe to re-run. Until then the Practice tab says the
-setup is missing; the court finder still works.
+**Practices database setup.** Section 6 of `supabase-setup.sql` has been applied
+to the live database (October 8, 2026). Run it again only when setting up a new
+Supabase project; it's safe to re-run. Without it, the Practice tab says the setup
+is missing and the court finder still works.
 
 **Change the captain password.** Run this in the Supabase SQL editor, then put
 the new value in `.env.local` and redeploy so captains stay auto-unlocked.
