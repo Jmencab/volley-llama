@@ -249,7 +249,7 @@ create table if not exists public.usta_practices (
   starts_at  timestamptz not null,
   minutes    int not null default 90 check (minutes between 30 and 360),
   site       text not null,
-  courts     smallint check (courts between 1 and 20),  -- courts booked; caps sign-ups at 4 per court
+  courts     smallint check (courts between 1 and 20),  -- courts booked; the app aims for 4 players per court
   notes      text,
   cancelled  boolean not null default false,
   created_by uuid references public.usta_players(id) on delete set null,
@@ -257,8 +257,7 @@ create table if not exists public.usta_practices (
 );
 alter table public.usta_practices add column if not exists created_by uuid references public.usta_players(id) on delete set null;
 
--- One row per player per practice. Order of arrival (updated_at) decides who's
--- in and who's on the waitlist once the courts are full.
+-- One row per player per practice. No cap: everyone who says "in" is in.
 create table if not exists public.usta_practice_signups (
   practice_id uuid not null references public.usta_practices(id) on delete cascade,
   player_id   uuid not null references public.usta_players(id) on delete cascade,

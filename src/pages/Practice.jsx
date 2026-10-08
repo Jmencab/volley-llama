@@ -7,7 +7,7 @@ import CourtFinder from '../components/CourtFinder'
 import { dayName, monthDay, pacificOffset, relativeShort, timeOf, timeRange, toLocalInput } from '../lib/dates'
 import { minutesAfterSunset, sunsetOn } from '../lib/sun'
 import { loadCourts } from '../lib/courts'
-import { PER_COURT, isPastPractice, practiceEnd, practiceRoster, practiceStart } from '../lib/practice'
+import { PER_COURT, headcount, isPastPractice, practiceEnd, practiceRoster, practiceStart } from '../lib/practice'
 
 export default function Practice() {
   const {
@@ -159,15 +159,9 @@ function PracticeCard({ practice: p, now, me, roster, court, nameOf, highlight, 
   const start = practiceStart(p)
   const end = practiceEnd(p)
   const mine = roster.playing.includes(me.id) ? 'in'
-    : roster.waitlist.includes(me.id) ? 'wait'
     : roster.out.includes(me.id) ? 'out' : null
-  const left = roster.cap ? roster.cap - roster.playing.length : null
   const sky = lightsNote(start, end, court)
-
-  const countLine = roster.cap
-    ? left > 0 ? `${roster.playing.length} in · ${left} ${left === 1 ? 'spot' : 'spots'} left`
-      : `Full${roster.waitlist.length ? ` · ${roster.waitlist.length} waiting` : ''}`
-    : `${roster.playing.length} in`
+  const { count, suggest } = headcount(p, roster.playing.length)
 
   return (
     <div id={`practice-${p.id}`} className={`card mcard ${p.cancelled ? 'done' : ''} ${highlight ? 'linked' : ''}`}>
@@ -182,7 +176,6 @@ function PracticeCard({ practice: p, now, me, roster, court, nameOf, highlight, 
               </div>
               {p.cancelled ? <span className="chip out">Cancelled</span>
                 : mine === 'in' ? <span className="chip available">You're in</span>
-                : mine === 'wait' ? <span className="chip maybe">Waitlist</span>
                 : null}
             </div>
             <a className="mrow-site truncate" style={{ display: 'block' }} href={mapsUrl(p.site)} target="_blank" rel="noreferrer">
@@ -190,24 +183,22 @@ function PracticeCard({ practice: p, now, me, roster, court, nameOf, highlight, 
             </a>
             <div className="mrow-opp">
               {p.courts ? `${p.courts} ${p.courts === 1 ? 'court' : 'courts'} · ` : ''}
-              <NameTip names={roster.playing.map(nameOf)}><span>{countLine}</span></NameTip>
+              <NameTip names={roster.playing.map(nameOf)}><span>{count}</span></NameTip>
             </div>
+            {suggest && !p.cancelled && <div className="tiny" style={{ color: 'var(--maybe)' }}>{suggest}</div>}
           </div>
         </div>
 
         {!p.cancelled && <div className={`tiny lights-report ${sky.level}`}>{sky.text}</div>}
         {p.notes && <div className="tiny" style={{ marginTop: 6, color: 'var(--text)' }}>{p.notes}</div>}
         {postedBy && <div className="tiny" style={{ marginTop: 6 }}>Posted by {postedBy}</div>}
-        {roster.waitlist.length > 0 && (
-          <div className="tiny" style={{ marginTop: 6 }}>Waitlist: {roster.waitlist.map((id) => firstName(nameOf(id))).join(', ')}</div>
-        )}
       </div>
 
       {!p.cancelled && (
         <div className="quickpick" style={{ gridTemplateColumns: '1fr 1fr' }}>
-          <button className={`qp available ${mine === 'in' || mine === 'wait' ? 'on' : ''}`}
-                  aria-pressed={mine === 'in' || mine === 'wait'} onClick={() => onSignup('in')}>
-            <span className="glyph">🎾</span><span>{left === 0 && mine !== 'in' && mine !== 'wait' ? 'Join waitlist' : "I'm in"}</span>
+          <button className={`qp available ${mine === 'in' ? 'on' : ''}`}
+                  aria-pressed={mine === 'in'} onClick={() => onSignup('in')}>
+            <span className="glyph">🎾</span><span>I'm in</span>
           </button>
           <button className={`qp out ${mine === 'out' ? 'on' : ''}`} aria-pressed={mine === 'out'} onClick={() => onSignup('out')}>
             <span className="glyph">🙅</span><span>Can't make it</span>
@@ -293,7 +284,7 @@ function PracticeSheet({ practice, courts, onClose, onSave, onCancel, onDelete }
             ))}
           </div>
           <div className="tiny" style={{ marginTop: 6 }}>
-            Sign-ups cap at {count * PER_COURT}; anyone after that goes on a waitlist.
+            Ideal is {PER_COURT} per court ({count * PER_COURT} players). No limit; the app suggests another court if more sign up.
           </div>
         </div>
 
@@ -341,7 +332,7 @@ function shareText(p, court, roster, nameOf) {
     : court?.lights ? `\u{1F4A1} Lit courts (sunset ${timeOf(sunsetOn(start))})`
     : court ? `\u{1F311} Heads up: no lights here, sunset ${timeOf(sunsetOn(start))}`
     : `\u{1F319} Sunset ${timeOf(sunsetOn(start))}`
-  const spots = roster.cap ? Math.max(0, roster.cap - roster.playing.length) : null
+  const hc = headcount(p, roster.playing.length)
   const inSoFar = roster.playing.map((id) => firstName(nameOf(id)))
 
   return [
@@ -352,7 +343,7 @@ function shareText(p, court, roster, nameOf) {
     p.notes ? `\u{1F4DD} ${p.notes}` : null,
     '',
     inSoFar.length ? `In so far: ${inSoFar.join(', ')}` : null,
-    spots === null ? null : spots > 0 ? `${spots} ${spots === 1 ? 'spot' : 'spots'} left` : 'Full; sign up for the waitlist',
+    [hc.count, hc.suggest].filter(Boolean).join('. '),
     `Sign up: ${teamLink(`/practice?p=${p.id}`)}`,
   ].filter((line) => line !== null).join('\n')
 }
