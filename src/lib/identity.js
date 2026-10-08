@@ -36,6 +36,9 @@ export const setCaptainLocked = (on) => {
 const TEAM_KEY = 'thevolleyllama' // compared lowercase so typers can't miss
 const TEAM_OK = 'vl_team_ok'
 
+// A link teammates can open straight into the app, password and all.
+export const teamLink = (path) => `${window.location.origin}${path}${path.includes('?') ? '&' : '?'}key=${TEAM_KEY}`
+
 export const checkTeamKey = (raw) => (raw || '').trim().toLowerCase() === TEAM_KEY
 
 export const getTeamOk = () => {

@@ -10,6 +10,7 @@ import CaptainGate from './components/CaptainGate'
 import Splash, { PLAY_SPLASH } from './components/Splash'
 import Home from './pages/Home'
 import Schedule from './pages/Schedule'
+import Practice from './pages/Practice'
 import MatchDetail from './pages/MatchDetail'
 import Team from './pages/Team'
 import Captain from './pages/Captain'
@@ -66,6 +67,7 @@ function Shell() {
           <Route path="/" element={<Home />} />
           <Route path="/schedule" element={<Schedule />} />
           <Route path="/match/:id" element={<MatchDetail />} />
+          <Route path="/practice" element={<Practice />} />
           <Route path="/team" element={<Team />} />
           <Route path="/captain" element={<CaptainGate><Captain /></CaptainGate>} />
           <Route path="/captain/:id" element={<CaptainGate><CaptainMatch /></CaptainGate>} />

@@ -2,9 +2,10 @@
 // Detail pages rank a half-step past their tab: opening one reads as "forward",
 // coming back reads as "back". Anything unknown ranks with Home.
 const RANK = [
-  [/^\/captain\/./, 3.5],
-  [/^\/captain/, 3],
-  [/^\/team/, 2],
+  [/^\/captain\/./, 4.5],
+  [/^\/captain/, 4],
+  [/^\/team/, 3],
+  [/^\/practice/, 2],
   [/^\/match\//, 1.5],
   [/^\/schedule/, 1],
 ]

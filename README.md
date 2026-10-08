@@ -21,6 +21,7 @@ Built with React + Vite, Supabase, and Netlify.
 
 - **Home**: the next match, whether you're in the lineup, and a one-tap availability picker.
 - **Schedule**: every match with time, site, and home/away. Answer *Available / Maybe / Out* right from the list.
+- **Practice**: anyone can post a practice and share it to the team's WhatsApp group with the court, a map link, and a sign-up link. Sign-ups are first come, first served, and extras go on a waitlist. There's also a court finder for Seattle courts, with which ones have lights and whether a teammate says the lights actually worked last time.
 - **Stats**: team record, results by court, a player leaderboard, best partnerships, and each player's match log.
 - No accounts. Pick your name once; update your details any time from **Stats → Edit my details**.
 
@@ -30,6 +31,7 @@ Built with React + Vite, Supabase, and Netlify.
 - A red **!** on any upcoming match that doesn't have enough yeses to field a lineup.
 - A lineup builder for three courts (one man and one woman each) that flags maybes, no-answers, dropouts, and any pair over the **6.0 combined NTRP** limit.
 - **Auto-suggest**, which drafts a legal lineup and explains its choices. See [Lineups](#lineups).
+- Edit, cancel, or delete any practice. Players can only change the ones they posted.
 - Post the lineup to the team, copy it as a group text, send a nudge to anyone who hasn't answered, enter scores, and edit match details.
 
 ## Getting started
@@ -70,6 +72,7 @@ src/
 ├── pages/
 │   ├── Home.jsx         Next match and your availability
 │   ├── Schedule.jsx     Every match, with quick availability picks
+│   ├── Practice.jsx     Practice sign-ups and the court finder
 │   ├── MatchDetail.jsx  One match: who's in and the posted lineup
 │   ├── Team.jsx         Stats tab: records, leaderboard, your profile, captain unlock
 │   ├── Captain.jsx      Captain overview: upcoming matches, playing time, pairings
@@ -84,6 +87,9 @@ src/
     ├── rules.js         League rules (the 6.0 combined cap)
     ├── suggest.js       The auto-suggest algorithm
     ├── dates.js         Pacific-time formatting and match phases
+    ├── practice.js      Practice capacity, sign-up order, waitlist
+    ├── courts.js        Seattle's public court list (city GIS) and booking links
+    ├── sun.js           Seattle sunset times, for "will we need lights"
     ├── identity.js      Team password, player identity, captain password
     ├── nav.js           Tab order, used for page-slide direction
     └── supabase.js      Supabase client
@@ -117,6 +123,9 @@ Everything lives in Supabase, in tables prefixed `usta_`.
 | `usta_matches` | Each match: time, home/away, opponent, site, team note, whether the lineup is posted |
 | `usta_availability` | One row per player per match: `available`, `maybe`, or `out` |
 | `usta_lineups` | One row per match per court: the pair, `won`, and `score` |
+| `usta_practices` | Practices: time, length, site, courts booked, note, cancelled |
+| `usta_practice_signups` | One row per player per practice: `in` or `out`; `updated_at` is their place in line |
+| `usta_court_reports` | Teammates' "lights worked / lights out" reports, by city court name |
 | `usta_config` | The captain password hash (no browser access) |
 
 - **Every statistic comes from `usta_lineups`**: play counts, records, partnerships,
@@ -127,6 +136,24 @@ Everything lives in Supabase, in tables prefixed `usta_`.
   phone through Supabase Realtime.
 - **Names:** `usta_players.name` is the official USTA roster name. The app shows
   `preferred_name` when one is set, through `displayName()` in `src/components/ui.jsx`.
+
+### Practices and courts
+
+- **Anyone can post; the poster or a captain can change it.** The database
+  checks this (`usta_can_edit_practice`), using the name picked on the device,
+  the same trust model as availability.
+- **Share** opens WhatsApp (`wa.me`) with the message filled in; you pick the
+  group. The sign-up link includes the team password and opens that practice.
+- **Capacity is four per booked court.** Sign-ups beyond that go on a waitlist in
+  the order people tapped *I'm in*.
+- **The court list comes straight from Seattle Parks' GIS layer**
+  (`Tennis_Courts` on services.arcgis.com, refreshed weekly by the city). Its
+  `LIGHTS` field says which sites have lights. Nothing official says whether the
+  lights are *working*, so teammates report that from the court finder.
+- **Court availability isn't in the app.** The city's booking system (ActiveNet)
+  and its availability dashboard have no API a browser can call, so each court
+  links out to **Book**, and the finder links to the city's availability dashboard.
+  Outdoor courts must be booked at least 24 hours ahead.
 
 ### Match phases
 
@@ -196,6 +223,10 @@ change the date, site, and team note. No deploy needed.
 USTA number, phone. Everyone's roster updates immediately (it goes through the
 password-checked `usta_upsert_player` function). A name already on the roster
 is refused.
+
+**Set up practices (once).** Run section 6 of `supabase-setup.sql` in the
+Supabase SQL editor. It's safe to re-run. Until then the Practice tab says the
+setup is missing; the court finder still works.
 
 **Change the captain password.** Run this in the Supabase SQL editor, then put
 the new value in `.env.local` and redeploy so captains stay auto-unlocked.

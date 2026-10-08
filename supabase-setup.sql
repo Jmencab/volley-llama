@@ -254,3 +254,152 @@ alter publication supabase_realtime add table public.usta_matches;
 --   delete from public.usta_lineups;
 --   delete from public.usta_availability;
 --   update public.usta_matches set lineup_published = false;
+
+-- ============================ 6. practices ============================
+-- Added 2026-10. Safe to re-run: paste this whole section into the Supabase SQL
+-- editor once. Until it runs, the app's Practice tab says the setup is missing
+-- and everything else works as before.
+
+create table if not exists public.usta_practices (
+  id         uuid primary key default gen_random_uuid(),
+  starts_at  timestamptz not null,
+  minutes    int not null default 90 check (minutes between 30 and 360),
+  site       text not null,
+  courts     smallint check (courts between 1 and 20),  -- courts booked; caps sign-ups at 4 per court
+  notes      text,
+  cancelled  boolean not null default false,
+  created_by uuid references public.usta_players(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+alter table public.usta_practices add column if not exists created_by uuid references public.usta_players(id) on delete set null;
+
+-- One row per player per practice. Order of arrival (updated_at) decides who's
+-- in and who's on the waitlist once the courts are full.
+create table if not exists public.usta_practice_signups (
+  practice_id uuid not null references public.usta_practices(id) on delete cascade,
+  player_id   uuid not null references public.usta_players(id) on delete cascade,
+  status      text not null check (status in ('in','out')),
+  updated_at  timestamptz not null default now(),
+  primary key (practice_id, player_id)
+);
+
+-- "Were the lights working?" — the city lists which courts have lights, but not
+-- which ones are broken this week. Teammates report after they play.
+create table if not exists public.usta_court_reports (
+  id          uuid primary key default gen_random_uuid(),
+  court       text not null,   -- NAME from the city's Tennis_Courts GIS layer
+  lights_ok   boolean not null,
+  player_id   uuid references public.usta_players(id) on delete set null,
+  reported_at timestamptz not null default now()
+);
+
+create index if not exists usta_signups_practice_idx on public.usta_practice_signups(practice_id);
+create index if not exists usta_court_reports_court_idx on public.usta_court_reports(court, reported_at desc);
+
+alter table public.usta_practices        enable row level security;
+alter table public.usta_practice_signups enable row level security;
+alter table public.usta_court_reports    enable row level security;
+
+revoke all on public.usta_practices, public.usta_practice_signups, public.usta_court_reports from anon, authenticated;
+
+-- Same trust model as availability: anyone with the link signs up and reports
+-- lights. Practices are written only through the functions below.
+grant select on public.usta_practices to anon, authenticated;
+grant select, insert, update on public.usta_practice_signups to anon, authenticated;
+grant select, insert on public.usta_court_reports to anon, authenticated;
+
+drop policy if exists usta_practices_read on public.usta_practices;
+drop policy if exists usta_signups_read   on public.usta_practice_signups;
+drop policy if exists usta_signups_write  on public.usta_practice_signups;
+drop policy if exists usta_signups_update on public.usta_practice_signups;
+drop policy if exists usta_reports_read   on public.usta_court_reports;
+drop policy if exists usta_reports_write  on public.usta_court_reports;
+
+create policy usta_practices_read on public.usta_practices for select to anon, authenticated using (true);
+create policy usta_signups_read   on public.usta_practice_signups for select to anon, authenticated using (true);
+create policy usta_signups_write  on public.usta_practice_signups for insert to anon, authenticated with check (true);
+create policy usta_signups_update on public.usta_practice_signups for update to anon, authenticated using (true) with check (true);
+create policy usta_reports_read   on public.usta_court_reports for select to anon, authenticated using (true);
+create policy usta_reports_write  on public.usta_court_reports for insert to anon, authenticated with check (true);
+
+-- Anyone on the roster can post a practice (same trust model as availability:
+-- p_player_id is whoever picked that name on their phone). The person who
+-- posted it, or a captain, can change it.
+create or replace function public.usta_can_edit_practice(p_pass text, p_player_id uuid, p_id uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select public.usta_check_pass(p_pass)
+      or exists (select 1 from public.usta_practices
+                 where id = p_id and p_player_id is not null and created_by = p_player_id);
+$$;
+revoke all on function public.usta_can_edit_practice(text, uuid, uuid) from public, anon, authenticated;
+
+-- Earlier draft signatures, in case they were ever applied.
+drop function if exists public.usta_save_practice(text, uuid, timestamptz, int, text, int, text);
+drop function if exists public.usta_cancel_practice(text, uuid, boolean);
+drop function if exists public.usta_delete_practice(text, uuid);
+
+-- p_id null = create. Returns the practice id.
+create or replace function public.usta_save_practice(
+  p_pass text, p_player_id uuid, p_id uuid, p_starts_at timestamptz, p_minutes int,
+  p_site text, p_courts int, p_notes text)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare v_id uuid;
+begin
+  if nullif(btrim(coalesce(p_site, '')), '') is null then raise exception 'Pick a place to play'; end if;
+  if p_id is null then
+    if not exists (select 1 from public.usta_players where id = p_player_id and active)
+       and not public.usta_check_pass(p_pass) then
+      raise exception 'Pick your name first';
+    end if;
+    insert into public.usta_practices (starts_at, minutes, site, courts, notes, created_by)
+    values (p_starts_at, coalesce(p_minutes, 90), btrim(p_site), p_courts,
+            nullif(btrim(coalesce(p_notes, '')), ''), p_player_id)
+    returning id into v_id;
+  else
+    if not public.usta_can_edit_practice(p_pass, p_player_id, p_id) then
+      raise exception 'Only whoever posted this practice, or a captain, can change it';
+    end if;
+    update public.usta_practices
+       set starts_at = coalesce(p_starts_at, starts_at),
+           minutes   = coalesce(p_minutes, minutes),
+           site      = btrim(p_site),
+           courts    = p_courts,
+           notes     = nullif(btrim(coalesce(p_notes, '')), '')
+     where id = p_id returning id into v_id;
+  end if;
+  return v_id;
+end $$;
+
+create or replace function public.usta_cancel_practice(p_pass text, p_player_id uuid, p_id uuid, p_cancelled boolean)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.usta_can_edit_practice(p_pass, p_player_id, p_id) then
+    raise exception 'Only whoever posted this practice, or a captain, can change it';
+  end if;
+  update public.usta_practices set cancelled = coalesce(p_cancelled, true) where id = p_id;
+end $$;
+
+create or replace function public.usta_delete_practice(p_pass text, p_player_id uuid, p_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.usta_can_edit_practice(p_pass, p_player_id, p_id) then
+    raise exception 'Only whoever posted this practice, or a captain, can change it';
+  end if;
+  delete from public.usta_practices where id = p_id;
+end $$;
+
+grant execute on function public.usta_save_practice(text, uuid, uuid, timestamptz, int, text, int, text) to anon, authenticated;
+grant execute on function public.usta_cancel_practice(text, uuid, uuid, boolean) to anon, authenticated;
+grant execute on function public.usta_delete_practice(text, uuid, uuid) to anon, authenticated;
+
+-- "add table" fails if the table is already published, so only add what's missing.
+do $$
+declare t text;
+begin
+  foreach t in array array['usta_practices', 'usta_practice_signups', 'usta_court_reports'] loop
+    if not exists (select 1 from pg_publication_tables
+                   where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
+      execute format('alter publication supabase_realtime add table public.%I', t);
+    end if;
+  end loop;
+end $$;

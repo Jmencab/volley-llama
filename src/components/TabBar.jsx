@@ -18,6 +18,7 @@ export default function TabBar() {
       <div className="tabs-inner">
         <Tab to="/" glyph="🎾" label="HOME" end />
         <Tab to="/schedule" glyph="📅" label="SCHEDULE" />
+        <Tab to="/practice" glyph="🏃" label="PRACTICE" />
         <Tab to="/team" glyph="🦙" label="STATS" />
         {showCaptain && <Tab to="/captain" glyph="📋" label="CAPTAIN" />}
       </div>

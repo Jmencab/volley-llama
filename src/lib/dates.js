@@ -78,3 +78,18 @@ export const pacificOffset = (d) => {
   const h = m ? parseInt(m[1], 10) : -8
   return `${h < 0 ? '-' : '+'}${String(Math.abs(h)).padStart(2, '0')}:00`
 }
+
+// [year, month (1-12), day] of the Pacific calendar day containing d.
+export const pacificYmd = (d) => {
+  const p = fmt({ year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d)
+  const g = (t) => +p.find((x) => x.type === t).value
+  return [g('year'), g('month'), g('day')]
+}
+
+// "6–7:30pm", or "11:30am–1pm" when it crosses noon.
+export const timeRange = (start, end) => {
+  const a = timeOf(start)
+  const b = timeOf(end)
+  const sameHalf = a.slice(-2) === b.slice(-2)
+  return `${sameHalf ? a.slice(0, -2) : a}–${b}`
+}
