@@ -296,6 +296,24 @@ create table if not exists public.usta_court_reports (
 create index if not exists usta_signups_practice_idx on public.usta_practice_signups(practice_id);
 create index if not exists usta_court_reports_court_idx on public.usta_court_reports(court, reported_at desc);
 
+-- Place in line comes from the database clock, not the phone's, so a phone whose
+-- clock is off (or a hand-edited request) can't jump the waitlist. Re-saving the
+-- same answer keeps your spot; changing it sends you to the back.
+create or replace function public.usta_signup_stamp()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  if tg_op = 'INSERT' or new.status is distinct from old.status then
+    new.updated_at := now();
+  else
+    new.updated_at := old.updated_at;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists usta_signup_stamp on public.usta_practice_signups;
+create trigger usta_signup_stamp before insert or update on public.usta_practice_signups
+  for each row execute function public.usta_signup_stamp();
+
 alter table public.usta_practices        enable row level security;
 alter table public.usta_practice_signups enable row level security;
 alter table public.usta_court_reports    enable row level security;

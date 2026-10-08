@@ -44,7 +44,7 @@ export default function Practice() {
 
   const upcoming = practices.filter((p) => !isPastPractice(p, now))
   const nameOf = (id) => displayName(players.find((p) => p.id === id)) || '—'
-  const courtFor = (p) => courts.find((c) => sameSite(c.name, p.site))
+  const courtFor = (p) => findCourt(courts, p.site)
   const sharing = practices.find((p) => p.id === sharingId)
 
   return (
@@ -143,6 +143,18 @@ const sameSite = (cityName, site) => {
   const a = norm(cityName)
   const b = norm(site)
   return !!a && !!b && (a === b || b.startsWith(a) || a.startsWith(b))
+}
+
+// The city splits some parks into separately-lit sites ("Volunteer Park (Lower
+// Courts)" has lights, "(Upper Courts)" doesn't), so a loose match is only
+// trusted when it's unambiguous. Otherwise the card falls back to "make sure
+// this court has lights" rather than guessing.
+const findCourt = (courts, site) => {
+  const raw = (site || '').trim().toLowerCase()
+  const exact = courts.find((c) => c.name.toLowerCase() === raw)
+  if (exact) return exact
+  const hits = courts.filter((c) => sameSite(c.name, site))
+  return hits.length === 1 ? hits[0] : null
 }
 
 // What the sky will be doing, and whether the site can handle it.
@@ -244,7 +256,7 @@ function PracticeSheet({ practice, courts, onClose, onSave, onCancel, onDelete }
 
   const startsAt = when ? `${when}:00${pacificOffset(new Date(`${when}:00`))}` : null
   const start = startsAt ? new Date(startsAt) : null
-  const court = courts.find((c) => sameSite(c.name, site))
+  const court = findCourt(courts, site)
   const sky = start && site.trim() ? lightsNote(start, new Date(start.getTime() + minutes * 60000), court) : null
   const lit = courts.filter((c) => c.lights)
 
@@ -257,6 +269,11 @@ function PracticeSheet({ practice, courts, onClose, onSave, onCancel, onDelete }
     <Sheet title={practice.id ? 'Edit practice' : 'New practice'} onClose={onClose}>
       <form className="stack" onSubmit={(e) => {
         e.preventDefault()
+        // a practice that's already over would vanish from the list the moment it saved
+        if (start && start.getTime() + minutes * 60000 <= Date.now()) {
+          setErr('That time has already passed')
+          return
+        }
         run(() => onSave({ startsAt, minutes, site: site.trim(), courts: count, notes: notes.trim() }))
       }}>
         <div>

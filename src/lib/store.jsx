@@ -131,7 +131,9 @@ export function TeamProvider({ children }) {
     const prev = signups.find((r) => r.practice_id === practiceId && r.player_id === playerId)
     if (prev?.status === status) return
     const row = { practice_id: practiceId, player_id: playerId, status, updated_at: new Date().toISOString() }
-    setSignups((all) => [...all.filter((r) => r !== prev), row])
+    // match on the key, not object identity: a realtime refetch can replace the
+    // array between render and tap, and an identity check would keep a stale row
+    setSignups((all) => [...all.filter((r) => !(r.practice_id === practiceId && r.player_id === playerId)), row])
     const { error: e } = await supabase.from('usta_practice_signups').upsert(row, { onConflict: 'practice_id,player_id' })
     if (e) { setError('Could not save — check your signal'); loadPractice() }
     else setError(null)
