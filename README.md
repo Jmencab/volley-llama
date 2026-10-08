@@ -21,7 +21,7 @@ Built with React + Vite, Supabase, and Netlify.
 
 - **Home**: the next match, whether you're in the lineup, and a one-tap availability picker.
 - **Schedule**: every match with time, site, and home/away. Answer *Available / Maybe / Out* right from the list.
-- **Practice**: anyone can post a practice and share it to the team's WhatsApp group with the court, a map link, and a sign-up link. Sign-ups are first come, first served, and extras go on a waitlist. There's also a court finder for Seattle courts, with which ones have lights and whether a teammate says the lights actually worked last time.
+- **Practice**: anyone can post a practice and share it to the team's WhatsApp group with the court, a map link, and a sign-up link. There's no sign-up limit: the app shows the count against the ideal of four per court (e.g. *5/4 signed up*) and suggests booking another court when it's over. There's also a court finder for Seattle courts, with which ones have lights and whether a teammate says the lights actually worked last time.
 - **Stats**: team record, results by court, a player leaderboard, best partnerships, and each player's match log.
 - No accounts. Pick your name once; update your details any time from **Stats → Edit my details**.
 
@@ -87,7 +87,7 @@ src/
     ├── rules.js         League rules (the 6.0 combined cap)
     ├── suggest.js       The auto-suggest algorithm
     ├── dates.js         Pacific-time formatting and match phases
-    ├── practice.js      Practice capacity, sign-up order, waitlist
+    ├── practice.js      Practice sign-ups and the four-per-court headcount
     ├── courts.js        Seattle's public court list (city GIS) and booking links
     ├── sun.js           Seattle sunset times, for "will we need lights"
     ├── identity.js      Team password, player identity, captain password
@@ -124,7 +124,7 @@ Everything lives in Supabase, in tables prefixed `usta_`.
 | `usta_availability` | One row per player per match: `available`, `maybe`, or `out` |
 | `usta_lineups` | One row per match per court: the pair, `won`, and `score` |
 | `usta_practices` | Practices: time, length, site, courts booked, note, cancelled |
-| `usta_practice_signups` | One row per player per practice: `in` or `out`; `updated_at` (set by the database) is their place in line |
+| `usta_practice_signups` | One row per player per practice: `in` or `out`; `updated_at` (set by the database) is when they answered |
 | `usta_court_reports` | Teammates' "lights worked / lights out" reports, by city court name |
 | `usta_config` | The captain password hash (no browser access) |
 
@@ -145,11 +145,13 @@ Everything lives in Supabase, in tables prefixed `usta_`.
   name can act as them.
 - **Share** opens WhatsApp (`wa.me`) with the message filled in; you pick the
   group. The sign-up link includes the team password and opens that practice.
-- **Capacity is four per booked court.** Sign-ups beyond that go on a waitlist in
-  the order people said *I'm in*. The database stamps that time itself (the
-  `usta_signup_stamp` trigger), so a phone with a wrong clock can't change anyone's
-  place. Tapping the same answer again keeps your spot; changing it sends you to
-  the back of the line.
+- **Four per court is a target, not a cap.** Everyone who taps *I'm in* is in.
+  The card shows *5/4 signed up* and, when sign-ups outgrow the booked courts,
+  *Consider a 2nd court* (`headcount()` in `src/lib/practice.js`). Tapping the
+  count shows who's in, who can't make it, and who hasn't answered.
+- **Names are listed in the order people answered.** The database stamps that
+  time itself (the `usta_signup_stamp` trigger), so a phone with a wrong clock
+  can't reorder the list. Tapping the same answer again keeps your place.
 - **The court list comes straight from Seattle Parks' GIS layer**
   (`Tennis_Courts` on services.arcgis.com, refreshed weekly by the city). Its
   `LIGHTS` field says which sites have lights. Nothing official says whether the

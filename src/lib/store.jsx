@@ -126,7 +126,7 @@ export function TeamProvider({ children }) {
     [availability],
   )
 
-  // Re-tapping "I'm in" must not touch updated_at: it's the place in line.
+  // Re-tapping "I'm in" is a no-op, so names keep the order people answered in.
   const setSignup = useCallback(async (practiceId, playerId, status) => {
     const prev = signups.find((r) => r.practice_id === practiceId && r.player_id === playerId)
     if (prev?.status === status) return
