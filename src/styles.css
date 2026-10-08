@@ -761,3 +761,13 @@ input:focus, textarea:focus, select:focus {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------- practice & court finder ---------- */
+.lights-report { margin-top: 8px; }
+.lights-report.ok { color: var(--ok); }
+.lights-report.warn { color: var(--maybe); }
+.lights-report.bad { color: var(--out); }
+.finder-filters { flex-wrap: wrap; gap: 8px; }
+.finder-filters .chip { min-height: 36px; }
+.finder-area { width: auto; min-height: 36px; padding: 5px 11px; border-radius: 999px; font-size: 12.5px; font-weight: 800; border-width: 1.5px; }
+.finder-actions { flex-wrap: wrap; gap: 6px; margin-top: 10px; }
