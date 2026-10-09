@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTeam, useNow } from '../lib/store'
 import { buildStats, recordShort, winPctText } from '../lib/stats'
-import { Avatar, Sheet, displayName, venmoUrl } from '../components/ui'
+import { Avatar, Sheet, Toast, displayName, venmoUrl } from '../components/ui'
 import ProfileForm from '../components/ProfileForm'
+import PinForm from '../components/PinForm'
 import { isPastMatch } from '../lib/dates'
+import { smsLink, whatsappLink } from '../lib/phone'
 
 const SORTS = [
   ['played', 'Most played'],
@@ -12,11 +14,18 @@ const SORTS = [
 ]
 
 export default function Team() {
-  const { players, matches, lineups, me, chooseMe, isCaptain, unlockCaptain, lockCaptain, saveProfile } = useTeam()
+  const { players, matches, lineups, me, isCaptain, saveProfile, signOut } = useTeam()
   const nav = useNavigate()
   const now = useNow()
   const stats = useMemo(() => buildStats({ matches, lineups, now }), [matches, lineups, now])
-  const [unlocking, setUnlocking] = useState(false)
+  const [changingPin, setChangingPin] = useState(false)
+  const [toast, setToast] = useState('')
+
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(''), 2600)
+    return () => clearTimeout(t)
+  }, [toast])
   const [detail, setDetail] = useState(null)
   const [editing, setEditing] = useState(false)
   const [savingMe, setSavingMe] = useState(false)
@@ -150,18 +159,15 @@ export default function Team() {
       {/* ---------- device ---------- */}
       <div className="section"><h2 className="h2">You</h2></div>
       <div className="stack">
+        {isCaptain && <button className="btn wide primary" onClick={() => nav('/captain')}>Open captain tools</button>}
         <button className="btn wide" onClick={() => setEditing(true)}>Edit my details</button>
-        <button className="btn wide ghost" onClick={() => chooseMe(null)}>
-          Not {displayName(me)}? Switch player
+        <button className="btn wide" onClick={() => setChangingPin(true)}>Change my PIN</button>
+        <button className="btn wide ghost" onClick={async () => {
+          if (!confirm(`Sign ${displayName(me)} out of this phone? You'll need your phone number and PIN to get back in.`)) return
+          try { await signOut() } catch (e) { setToast(e.message) }
+        }}>
+          Sign out of this phone
         </button>
-        {isCaptain ? (
-          <>
-            <button className="btn wide primary" onClick={() => nav('/captain')}>Open captain tools</button>
-            <button className="btn wide ghost" onClick={lockCaptain}>Lock captain tools</button>
-          </>
-        ) : (
-          <button className="btn wide ghost" onClick={() => setUnlocking(true)}>Captain tools</button>
-        )}
       </div>
 
       {editing && (
@@ -179,7 +185,13 @@ export default function Team() {
         </Sheet>
       )}
 
-      {unlocking && <UnlockSheet onClose={() => setUnlocking(false)} unlock={unlockCaptain} onDone={() => nav('/captain')} />}
+      {changingPin && (
+        <Sheet title="Change my PIN" onClose={() => setChangingPin(false)}>
+          <PinForm needCurrent onDone={() => { setChangingPin(false); setToast('PIN changed') }} />
+          <div className="tiny mt">Forgot it? Ask a captain for a new invite link.</div>
+        </Sheet>
+      )}
+      <Toast>{toast}</Toast>
       {detail && <PlayerSheet player={detail} stats={stats} players={players} matches={matches} onClose={() => setDetail(null)} />}
     </div>
   )
@@ -191,38 +203,6 @@ const Stat = ({ label, value }) => (
     <div className="tiny" style={{ fontSize: 11 }}>{label}</div>
   </div>
 )
-
-function UnlockSheet({ onClose, unlock, onDone }) {
-  const [pass, setPass] = useState('')
-  const [err, setErr] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  const submit = async (e) => {
-    e.preventDefault()
-    setBusy(true); setErr('')
-    try {
-      const ok = await unlock(pass)
-      if (ok) onDone()
-      else setErr('That password did not work.')
-    } catch (e2) {
-      setErr(e2.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Sheet title="Captain password" onClose={onClose}>
-      <p className="sub">Setting lineups and entering results is captain-only.</p>
-      <form onSubmit={submit} className="stack mt">
-        <input type="password" value={pass} autoFocus placeholder="Captain password"
-               onChange={(e) => setPass(e.target.value)} />
-        {err && <div className="notice bad">{err}</div>}
-        <button className="btn primary wide" disabled={busy || !pass}>{busy ? 'Checking…' : 'Unlock'}</button>
-      </form>
-    </Sheet>
-  )
-}
 
 function PlayerSheet({ player, stats, players, matches, onClose }) {
   const s = stats.forPlayer(player.id)
@@ -250,8 +230,9 @@ function PlayerSheet({ player, stats, players, matches, onClose }) {
       </div>
 
       {(player.phone || player.venmo) && (
-        <div className="row mt" style={{ gap: 8 }}>
-          {player.phone && <a className="btn sm grow" href={`sms:${player.phone}`}>Text</a>}
+        <div className="row mt" style={{ gap: 8, flexWrap: 'wrap' }}>
+          {player.phone && <a className="btn sm grow" href={whatsappLink(player.phone)} target="_blank" rel="noreferrer">WhatsApp</a>}
+          {player.phone && <a className="btn sm grow" href={smsLink(player.phone)}>Text</a>}
           {player.phone && <a className="btn sm grow" href={`tel:${player.phone}`}>Call</a>}
           {player.venmo && (
             <a className="btn sm grow" href={venmoUrl(player.venmo)} target="_blank" rel="noreferrer">

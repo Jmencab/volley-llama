@@ -1,16 +1,35 @@
-import { useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useTeam, useNow } from '../lib/store'
 import { buildStats, recordShort } from '../lib/stats'
-import { DateChip, NEED_PER_GENDER, Sheet, availableByGender, displayName } from '../components/ui'
+import { Avatar, DateChip, NEED_PER_GENDER, Sheet, Toast, availableByGender, copyText, displayName, firstName } from '../components/ui'
+import ProfileForm from '../components/ProfileForm'
 import { monthDay, isPastMatch } from '../lib/dates'
+import { inviteLink } from '../lib/identity'
+import { formatPhone, smsLink, whatsappLink } from '../lib/phone'
 
 export default function Captain() {
-  const { matches, players, lineups, availOf, lineupFor, lockCaptain, addPlayer } = useTeam()
-  const nav = useNavigate()
+  const { matches, players, lineups, availOf, lineupFor, addPlayer, rosterAccess } = useTeam()
   const now = useNow()
   const stats = useMemo(() => buildStats({ matches, lineups, now }), [matches, lineups, now])
   const [adding, setAdding] = useState(false)
+  const [managing, setManaging] = useState(null) // player id
+  const [toast, setToast] = useState('')
+
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(''), 2600)
+    return () => clearTimeout(t)
+  }, [toast])
+
+  // who has joined, who's locked out; refreshed after anything changes it
+  const [access, setAccess] = useState({})
+  const refreshAccess = useCallback(() => {
+    rosterAccess()
+      .then((rows) => setAccess(Object.fromEntries((rows || []).map((r) => [r.player_id, r]))))
+      .catch(() => {})
+  }, [rosterAccess])
+  useEffect(() => { refreshAccess() }, [refreshAccess])
 
   const active = players.filter((p) => p.active)
   const upcoming = matches.filter((m) => !isPastMatch(m, now))
@@ -48,11 +67,25 @@ export default function Captain() {
           <div className="eyebrow">Captain</div>
           <h1 className="h1">Set lineups</h1>
         </div>
-        <button className="btn sm ghost" onClick={() => { lockCaptain(); nav('/') }}>Lock</button>
       </div>
 
-      <div className="section"><h2 className="h2">Roster</h2></div>
-      <button className="btn wide" onClick={() => setAdding(true)}>Add player</button>
+      <div className="section"><h2 className="h2">Roster</h2><span className="tiny">tap to invite or edit</span></div>
+      <div className="card" style={{ padding: 6 }}>
+        {active.map((p) => {
+          const st = accessStatus(p, access[p.id])
+          return (
+            <button key={p.id} className="pickrow" onClick={() => setManaging(p.id)}>
+              <Avatar player={p} />
+              <div className="grow truncate">
+                <div style={{ fontWeight: 700 }}>{displayName(p)}</div>
+                {p.is_captain && <div className="tiny">Captain</div>}
+              </div>
+              <span className={`chip ${st.tone}`}>{st.label}</span>
+            </button>
+          )
+        })}
+      </div>
+      <button className="btn wide mt" onClick={() => setAdding(true)}>Add player</button>
 
       <div className="section"><h2 className="h2">Coming up</h2></div>
       <div className="stack stagger">
@@ -164,12 +197,146 @@ export default function Captain() {
         </>
       )}
 
-      {adding && <AddPlayerSheet onClose={() => setAdding(false)} addPlayer={addPlayer} />}
+      {adding && (
+        <AddPlayerSheet
+          onClose={() => setAdding(false)}
+          addPlayer={addPlayer}
+          // straight on to their invite
+          onAdded={(id) => { setAdding(false); refreshAccess(); setManaging(id) }}
+        />
+      )}
+      {managing && players.some((p) => p.id === managing) && (
+        <PlayerAccessSheet
+          player={players.find((p) => p.id === managing)}
+          access={access[managing]}
+          onChanged={refreshAccess}
+          setToast={setToast}
+          onClose={() => setManaging(null)}
+        />
+      )}
+      <Toast>{toast}</Toast>
     </div>
   )
 }
 
-function AddPlayerSheet({ onClose, addPlayer }) {
+// One chip per roster row: the thing the captain might need to act on.
+function accessStatus(p, a) {
+  if (!p.phone) return { label: 'No phone', tone: 'out' }
+  if (!a) return { label: '…', tone: '' }
+  if (a.locked) return { label: 'PIN locked', tone: 'out' }
+  if (a.devices > 0) return { label: 'Signed in', tone: 'available' }
+  if (a.has_pin) return { label: 'Signed out', tone: '' }
+  if (a.invite_expires) return { label: 'Invited', tone: 'maybe' }
+  return { label: 'Not invited', tone: 'maybe' }
+}
+
+function PlayerAccessSheet({ player, access: a, onChanged, setToast, onClose }) {
+  const { me, createInvite, unlockPin, signOutPlayer, saveProfile, setCaptain } = useTeam()
+  const [invite, setInvite] = useState(null) // the message, once a link is made
+  const [editing, setEditing] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const first = firstName(displayName(player))
+
+  const act = async (fn, done) => {
+    setBusy(true); setErr('')
+    try { await fn(); onChanged(); if (done) setToast(done) } catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+
+  const makeInvite = () => act(async () => {
+    const token = await createInvite(player.id)
+    setInvite(
+      `Hi ${first}! Here's your sign-in link for the Volley Llama team app:\n${inviteLink(token)}\n\n` +
+      "It signs you in on your phone and asks you to choose an 8-digit PIN for next time. " +
+      'The link works once and expires in 7 days.',
+    )
+  })
+
+  if (editing) {
+    return (
+      <Sheet title={`Edit ${first}`} onClose={onClose}>
+        <ProfileForm
+          player={player} greet={false} busy={busy} saveLabel="Save" onBack={() => setEditing(false)}
+          onSave={async (fields) => {
+            setBusy(true)
+            try { await saveProfile(player.id, fields); setEditing(false); setToast('Saved') } finally { setBusy(false) }
+          }}
+        />
+      </Sheet>
+    )
+  }
+
+  return (
+    <Sheet title={displayName(player)} onClose={onClose}>
+      <div className="sub" style={{ marginTop: -6 }}>
+        {player.is_captain ? 'Captain · ' : ''}{player.phone ? formatPhone(player.phone) : 'No phone number yet'}
+        {player.email ? ` · ${player.email}` : ''}
+      </div>
+      <div className="tiny mt">{describe(a)}</div>
+
+      {invite ? (
+        <div className="stack mt">
+          <textarea readOnly rows={6} value={invite} onFocus={(e) => e.target.select()} />
+          <a className="btn primary wide" href={whatsappLink(player.phone, invite)} target="_blank" rel="noreferrer">
+            Send on WhatsApp
+          </a>
+          <a className="btn wide" href={smsLink(player.phone, invite)}>Send as a text</a>
+          <button className="btn wide ghost" onClick={async () => {
+            setToast((await copyText(invite)) ? 'Copied' : "Couldn't copy — select the text and copy it by hand")
+          }}>Copy</button>
+        </div>
+      ) : (
+        <div className="stack mt">
+          {player.phone ? (
+            <button className="btn primary wide" disabled={busy} onClick={makeInvite}>
+              {a?.has_pin || a?.invite_expires ? 'Send a new sign-in link' : 'Send invite link'}
+            </button>
+          ) : (
+            <div className="notice info">Add their phone number first. It's how they sign in.</div>
+          )}
+          {a?.locked && (
+            <button className="btn wide" disabled={busy} onClick={() => act(() => unlockPin(player.id), 'PIN unlocked')}>
+              Unlock PIN
+            </button>
+          )}
+          <button className="btn wide" disabled={busy} onClick={() => setEditing(true)}>Edit details</button>
+          <button className="btn wide" disabled={busy} onClick={() => {
+            const on = !player.is_captain
+            const self = player.id === me.id
+            if (!confirm(on
+              ? `Make ${first} a captain? They'll be able to set lineups, enter scores, edit anyone's details, and make other captains.`
+              : self ? "Stop being a captain? You'll lose the Captain tab right away." : `Remove ${first} as a captain?`)) return
+            act(() => setCaptain(player.id, on), on ? `${first} is now a captain` : self ? null : `${first} is no longer a captain`)
+          }}>
+            {player.is_captain ? (player.id === me.id ? 'Stop being a captain' : 'Remove as captain') : 'Make captain'}
+          </button>
+          {a?.devices > 0 && (
+            <button className="btn wide ghost" disabled={busy} onClick={() => {
+              if (!confirm(`Sign ${first} out on every phone? Their PIN still works.`)) return
+              act(() => signOutPlayer(player.id), 'Signed out everywhere')
+            }}>
+              Sign out of all phones
+            </button>
+          )}
+        </div>
+      )}
+      {err && <div className="notice bad mt">{err}</div>}
+    </Sheet>
+  )
+}
+
+function describe(a) {
+  if (!a) return ''
+  const parts = []
+  if (a.devices > 0) parts.push(`Signed in on ${a.devices} ${a.devices === 1 ? 'phone' : 'phones'}`)
+  else if (a.has_pin) parts.push('Has a PIN, not signed in anywhere')
+  else parts.push('Hasn\'t joined yet')
+  if (a.locked) parts.push('PIN locked after 10 wrong tries')
+  if (a.invite_expires) parts.push(`unopened link expires ${monthDay(new Date(a.invite_expires))}`)
+  return parts.join(' · ')
+}
+
+function AddPlayerSheet({ onClose, addPlayer, onAdded }) {
   const [name, setName] = useState('')
   const [gender, setGender] = useState('F')
   const [ntrp, setNtrp] = useState('')
@@ -181,10 +348,11 @@ function AddPlayerSheet({ onClose, addPlayer }) {
   const submit = async (e) => {
     e.preventDefault()
     if (!name.trim()) { setErr('Give them a name.'); return }
+    if (!phone.trim()) { setErr("Add their phone number. It's how they sign in."); return }
     setBusy(true); setErr('')
     try {
-      await addPlayer({ name: name.trim(), gender, ntrp: ntrp ? Number(ntrp) : null, phone: phone.trim(), ustaNumber: ustaNumber.trim() })
-      onClose()
+      const id = await addPlayer({ name: name.trim(), gender, ntrp: ntrp ? Number(ntrp) : null, phone: phone.trim(), ustaNumber: ustaNumber.trim() })
+      onAdded(id)
     } catch (e2) {
       // roster names are unique; Postgres' wording for that isn't for humans
       setErr(/duplicate key|23505/.test(e2.message) ? 'Someone with that name is already on the roster.' : e2.message)
@@ -230,12 +398,12 @@ function AddPlayerSheet({ onClose, addPlayer }) {
 
         <div>
           <div className="eyebrow" style={{ marginBottom: 6 }}>Phone</div>
-          <input type="tel" inputMode="tel" value={phone} placeholder="Optional"
-                 autoComplete="tel" onChange={(e) => setPhone(e.target.value)} />
+          <input type="tel" inputMode="tel" value={phone} placeholder="206-555-0134"
+                 autoComplete="off" onChange={(e) => setPhone(e.target.value)} />
         </div>
 
         {err && <div className="notice bad">{err}</div>}
-        <button className="btn primary wide" disabled={busy || !name.trim()}>
+        <button className="btn primary wide" disabled={busy || !name.trim() || !phone.trim()}>
           {busy ? 'Adding…' : 'Add to roster'}
         </button>
       </form>

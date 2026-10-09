@@ -23,7 +23,7 @@ Built with React + Vite, Supabase, and Netlify.
 - **Schedule**: every match with time, site, and home/away. Answer *Available / Maybe / Out* right from the list.
 - **Practice**: anyone can post a practice and share it to the team's WhatsApp group with the court, a map link, and a sign-up link. There's no sign-up limit: the app shows the count against the ideal of four per court (e.g. *5/4 signed up*) and suggests booking another court when it's over. There's also a court finder for Seattle courts, with which ones have lights and whether a teammate says the lights actually worked last time.
 - **Stats**: team record, results by court, a player leaderboard, best partnerships, and each player's match log.
-- No accounts. Pick your name once; update your details any time from **Stats → Edit my details**.
+- Sign in once per phone with the invite link your captain sends, then choose an 8-digit PIN. On a new phone, sign in with your phone number and PIN. Update your details any time from **Stats → Edit my details**.
 
 **For captains**
 
@@ -48,7 +48,9 @@ The Supabase values aren't in the repository; ask Kevin for them. Git ignores
 `.env.local`, so they never get committed.
 
 Vite prints the local URL (usually http://localhost:5173). The first screen asks
-for the team password, which is `TEAM_KEY` in `src/lib/identity.js`.
+for your phone number and PIN. Sessions belong to the site's address, so
+localhost needs its own sign-in: ask a captain for an invite link and change
+its start to `http://localhost:5173`.
 
 | Command | What it does |
 |---|---|
@@ -60,7 +62,7 @@ for the team password, which is `TEAM_KEY` in `src/lib/identity.js`.
 > [!WARNING]
 > **Local development uses the live database.** There is no staging environment,
 > so anything you do in `npm run dev`, such as setting availability, changes real
-> team data. Captain actions still require the password.
+> team data, as whoever you're signed in as.
 
 ## Project layout
 
@@ -90,7 +92,8 @@ src/
     ├── practice.js      Practice sign-ups and the four-per-court headcount
     ├── courts.js        Seattle's public court list (city GIS) and booking links
     ├── sun.js           Seattle sunset times, for "will we need lights"
-    ├── identity.js      Team password, player identity, captain password
+    ├── identity.js      Invite links and other links into the app
+    ├── phone.js         Phone formatting, WhatsApp and text links
     ├── nav.js           Tab order, used for page-slide direction
     └── supabase.js      Supabase client
 
@@ -103,15 +106,29 @@ netlify.toml             Build settings and SPA redirect
 
 ### Access
 
-There are no user accounts, just three layers:
+Every player signs in, so nobody can act as a teammate, by accident or on
+purpose. There are no passwords or emails to verify, because the captain
+already knows everyone on the team:
 
-| Layer | What it does | Where it lives |
+| Step | What happens | Where it lives |
 |---|---|---|
-| **Team password** | Keeps out anyone who stumbles on the URL. Client-side only, by design. A link ending in `?key=<password>` unlocks the app and then removes the key from the address bar. | `TEAM_KEY` in `src/lib/identity.js` |
-| **Player identity** | Each player picks their name once, and the device remembers it. | `localStorage` |
-| **Captain password** | Required for every lineup, result, and match edit. Checked inside Postgres against a SHA-256 hash that the browser can never read. | `usta_config` table and the `usta_*` database functions |
+| **Invite link** | A captain sends each player a personal link (`/join#t=…`) from the roster, by WhatsApp or text. Opening it signs that phone in. It works once and expires after 7 days. | `usta_invites` (token hashes only), `usta_create_invite` |
+| **PIN** | Right after the link, the player chooses an 8-digit PIN. The database refuses easy ones and the last 8 digits of their own phone number. | `usta_player_secrets` (bcrypt), `usta_set_pin` |
+| **Phone + PIN** | Signs in on any other phone, or after iOS clears the site. Ten wrong tries lock the PIN until a captain unlocks it or sends a new link. | `usta_pin_sign_in` |
+| **Captain** | Whoever has `is_captain` on the roster. The database checks it on every captain action. | `usta_is_captain()` |
 
-Anyone with the link can set availability. That's deliberate, so nobody needs a login.
+How it works underneath: each phone gets a Supabase *anonymous session*,
+which any visitor can get. Being signed in to Supabase therefore proves
+nothing on its own. A row in `usta_player_devices` ties a session to a player
+once an invite or PIN checks out, and every rule asks `usta_me()`, which reads
+that table. Someone who isn't tied to a player can't read anything.
+
+- Players change only their own availability, sign-ups, lights reports, and
+  details. Captains can change anyone's, for the "put me down as out" texts.
+- Phone numbers are stored as `+12065550134`, are unique, and are required.
+  They're how a player signs in and how the app opens a WhatsApp or text to them.
+- Links sent before sign-in existed (`?key=…`) still open the app; the old key
+  is ignored.
 
 ### Data
 
@@ -119,32 +136,33 @@ Everything lives in Supabase, in tables prefixed `usta_`.
 
 | Table | Contents |
 |---|---|
-| `usta_players` | Roster: USTA name, preferred name, gender, NTRP, USTA number, phone, Venmo, captain flag |
+| `usta_players` | Roster: USTA name, preferred name, gender, NTRP, USTA number, phone (required, unique), email (optional), Venmo, captain flag |
 | `usta_matches` | Each match: time, home/away, opponent, site, team note, whether the lineup is posted |
 | `usta_availability` | One row per player per match: `available`, `maybe`, or `out` |
 | `usta_lineups` | One row per match per court: the pair, `won`, and `score` |
 | `usta_practices` | Practices: time, length, site, courts booked, note, cancelled |
 | `usta_practice_signups` | One row per player per practice: `in` or `out`; `updated_at` (set by the database) is when they answered |
 | `usta_court_reports` | Teammates' "lights worked / lights out" reports, by city court name |
-| `usta_config` | The captain password hash (no browser access) |
+| `usta_player_devices` | Which sessions (phones) are signed in as which player (no browser access) |
+| `usta_player_secrets` | PIN hashes and wrong-try counts (no browser access) |
+| `usta_invites` | Hashes of invite tokens, with expiry and when used (no browser access) |
 
 - **Every statistic comes from `usta_lineups`**: play counts, records, partnerships,
   and court history. Entering scores after each match is the only upkeep. A lineup
   counts toward play totals once the match starts or the lineup is posted; a draft
   for a future match doesn't.
 - **Changes sync live.** Availability, lineups, match edits, practices, sign-ups, and
-  lights reports update on every open phone through Supabase Realtime.
+  lights reports update on every open phone through Supabase Realtime, which
+  applies the same read rules, so only signed-in teammates get them.
 - **Names:** `usta_players.name` is the official USTA roster name. The app shows
   `preferred_name` when one is set, through `displayName()` in `src/components/ui.jsx`.
 
 ### Practices and courts
 
 - **Anyone can post; the poster or a captain can change it.** The database
-  checks this (`usta_can_edit_practice`) against the name picked on the device.
-  Like availability, that's an honor system: someone who picks a teammate's
-  name can act as them.
+  checks this (`usta_can_edit_practice`) against who's signed in.
 - **Share** opens WhatsApp (`wa.me`) with the message filled in; you pick the
-  group. The sign-up link includes the team password and opens that practice.
+  group. The sign-up link opens that practice, after signing in if needed.
 - **Four per court is a target, not a cap.** Everyone who taps *I'm in* is in.
   The card shows *5/4 signed up* and, when sign-ups outgrow the booked courts,
   *Consider a 2nd court* (`headcount()` in `src/lib/practice.js`). Tapping the
@@ -200,8 +218,8 @@ The suggestion fills the draft so the captain can review it before saving.
 ### UTR ratings (captains only)
 
 Each player's UTR (singles and doubles, with UTR's own reliability percentage)
-lives in `usta_player_ratings`, a table the browser cannot read at all. Once
-captain tools are unlocked, the app fetches it through the password-checked
+lives in `usta_player_ratings`, a table the browser cannot read at all. For a
+signed-in captain, the app fetches it through the captain-checked
 `usta_captain_ratings` function and shows doubles UTR on the lineup slot cards
 and in the player picker, with the reliability figure when it's under 90%. The
 auto-suggest uses it too, shrinking an unreliable number toward the team's
@@ -219,36 +237,58 @@ update public.usta_player_ratings r
 
 ## Captain operations
 
-**Captain tools.** Players marked as captains on the roster see the Captain tab
-and are unlocked automatically: the captain password comes from
-`VITE_CAPTAIN_PASS` in `.env.local` and is still verified server-side, so if
-the password ever changes without updating that file, the app simply asks for
-it. **Lock captain tools** on the Stats tab turns that off for a device until
-you unlock again. Anyone else can unlock from Stats → **Captain tools** by
-entering the password.
+**Captain tools.** Players with `is_captain` on the roster see the Captain
+tab. Any captain can make another player a captain, for example someone to run
+a match they'll miss: Captain → Roster → the player → **Make captain**. The same
+button removes a captain. The team always keeps at least one captain
+(`usta_set_captain` refuses to remove the last).
+
+**Invite a player, or let them back in.** Captain → **Roster** shows where each
+player stands: *Not invited*, *Invited*, *Signed in*, *Signed out*, *PIN locked*,
+or *No phone*. Tap a player to:
+
+- **Send invite link.** Opens WhatsApp or Messages straight to them with the
+  link filled in. The same button sends a new link when someone forgets their
+  PIN. Opening it lets them choose a new one without the old one, and clears a lock.
+- **Unlock PIN** after ten wrong tries.
+- **Edit details**: name, phone, email, Venmo.
+- **Sign out of all phones** for a lost phone. Their PIN still works.
+
+**The first captain** on a new project has nobody to invite them. Run this in
+the Supabase SQL editor and open `https://<site>/join#t=<the result>`:
+
+```sql
+select public.usta_admin_invite('First Last');
+```
 
 **Reschedule a match.** Captain → the match → **Match details → Edit** lets you
 change the date, site, and team note. No deploy needed.
 
 **Add a player.** Captain → **Roster → Add player**: name, woman/man, NTRP,
-USTA number, phone. Everyone's roster updates immediately (it goes through the
-password-checked `usta_upsert_player` function). A name already on the roster
-is refused.
+USTA number, phone (required). Everyone's roster updates immediately (it goes
+through the captain-checked `usta_upsert_player` function). A name or phone
+number already on the roster is refused. Saving goes straight to their invite.
 
-**Practices database setup.** Section 6 of `supabase-setup.sql` has been applied
-to the live database (October 8, 2026). Run it again only when setting up a new
-Supabase project; it's safe to re-run. Without it, the Practice tab says the setup
-is missing and the court finder still works.
+**Database setup.** `supabase-setup.sql` is the whole schema and is safe to
+re-run: paste all of it into the Supabase SQL editor to set up a new project or
+bring the live one up to date. Before the first run, turn on **Authentication →
+Sign In / Providers → Allow anonymous sign-ins**. If two players share a phone
+number, the script stops and says so; fix that and run it again.
 
-**Change the captain password.** Run this in the Supabase SQL editor, then put
-the new value in `.env.local` and redeploy so captains stay auto-unlocked.
+**Switching the live app to sign-in** (once, October 2026). The old app stops
+working as soon as the database is updated, so do these together:
 
-```sql
-select public.usta_set_captain_pass('current-password', 'new-password');
-```
-
-**Change the team password.** Edit `TEAM_KEY` in `src/lib/identity.js` (keep it
-lowercase), then deploy.
+1. Turn on anonymous sign-ins (above).
+2. Run `supabase-setup.sql`. It converts existing US phone numbers to the new
+   format and leaves anything else for a captain to fix.
+3. Make Julio and Kevin the only captains. Before the switch, `is_captain`
+   only showed the Captain tab; from here on it's real power:
+   ```sql
+   update public.usta_players set is_captain = name in ('Julio Mendez', 'Kevin Jeyakumar');
+   ```
+4. Deploy the new build.
+5. Run `select public.usta_admin_invite('<your roster name>');` and open your link.
+6. From Captain → Roster, give anyone marked *No phone* a number, then send everyone their invite.
 
 ## Deploying
 
@@ -281,13 +321,13 @@ Remember that local development writes to the live database.
   `Sheet` and `Toast` in `src/components/ui.jsx` use a portal for this reason; do the
   same for any new overlay.
 - **iPhones clear site data after about a week without a visit** (apps added to the
-  home screen are exempt). A player who hasn't opened the app in a while may see the
-  password and name screens again. Sending the `?key=` link makes that painless.
+  home screen are exempt). A player who hasn't opened the app in a while signs in
+  again with their phone number and PIN.
+- **An invite opened inside WhatsApp's own browser** signs in that browser, not
+  Safari or Chrome. That's why the PIN step comes right after: it gets them in anywhere else.
 - **The splash animation plays once per browser session** and waits for data (up to
   4.5 seconds). Open a new tab or run `sessionStorage.clear()` to see it again. Its
   animation steps share one timing, so retime them together.
 - **Motion is turned off** for anyone with *Reduce motion* enabled, splash included.
-- **Phone and Venmo edits need the captain password.** Players can change their
-  preferred name and gender freely; contact details are read-only unless the
-  device has captain tools unlocked, and the database refuses the change without
-  the password either way (`usta_update_profile`).
+- **Captain status is read from the roster on every call.** Unticking
+  `is_captain` takes effect at once; there's no password to rotate.

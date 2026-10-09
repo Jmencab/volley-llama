@@ -1,6 +1,5 @@
 import { createContext, useContext, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './supabase'
-import { getMyId, setMyId, getCaptainPass, setCaptainPass, getCaptainLocked, setCaptainLocked } from './identity'
 
 const Ctx = createContext(null)
 export const useTeam = () => useContext(Ctx)
@@ -20,10 +19,22 @@ export function TeamProvider({ children }) {
   // null until loaded; a string when the practice tables aren't set up yet, so
   // a missing migration only dims the Practice tab instead of the whole app
   const [practiceError, setPracticeError] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState(null)
-  const [myId, setMyIdState] = useState(getMyId)
-  const [captainPass, setPassState] = useState(getCaptainPass)
+  // Who this phone is signed in as: undefined while checking, null when signed
+  // out, else { player_id, has_pin } from usta_whoami.
+  const [who, setWho] = useState(undefined)
+  const myId = who?.player_id || null
+  const signedIn = !!myId
+
+  const refreshWho = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) { setWho(null); return null }
+    const { data, error: e } = await supabase.rpc('usta_whoami')
+    if (e) throw e
+    setWho(data || null)
+    return data || null
+  }, [])
 
   const load = useCallback(async () => {
     try {
@@ -45,7 +56,7 @@ export function TeamProvider({ children }) {
     } catch (e) {
       setError(e.message || 'Could not reach the server')
     } finally {
-      setLoading(false)
+      setLoaded(true)
     }
   }, [])
 
@@ -64,7 +75,26 @@ export function TeamProvider({ children }) {
     setPracticeError(null)
   }, [])
 
-  useEffect(() => { load(); loadPractice() }, [load, loadPractice])
+  const clear = useCallback(() => {
+    setPlayers([]); setMatches([]); setAvailability({}); setLineups([])
+    setPractices([]); setSignups([]); setCourtReports([]); setLoaded(false); setError(null)
+  }, [])
+
+  // Signed out, nothing is readable, so there's nothing to load; what an
+  // earlier player loaded is cleared rather than left on screen.
+  const start = useCallback(async () => {
+    try {
+      setError(null)
+      const w = await refreshWho()
+      if (w?.player_id) await Promise.all([load(), loadPractice()])
+      else clear()
+    } catch (e) {
+      setError(e.message || 'Could not reach the server')
+    }
+  }, [refreshWho, load, loadPractice, clear])
+
+  useEffect(() => { start() }, [start])
+
 
   // One lineup save writes three rows and so fires three change events; coalesce
   // them into a single refetch.
@@ -77,6 +107,7 @@ export function TeamProvider({ children }) {
   // Live updates so the captain watches answers land, plus a refetch whenever the
   // phone comes back to the app (realtime sockets die in the background on iOS).
   useEffect(() => {
+    if (!signedIn) return
     const ch = supabase
       .channel('usta-live')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'usta_availability' }, (p) => {
@@ -93,23 +124,74 @@ export function TeamProvider({ children }) {
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'usta_lineups' }, scheduleLoad)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'usta_matches' }, scheduleLoad)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'usta_players' }, scheduleLoad)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'usta_practices' }, loadPractice)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'usta_practice_signups' }, loadPractice)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'usta_court_reports' }, loadPractice)
       .subscribe()
 
-    const onVisible = () => { if (!document.hidden) { load(); loadPractice() } }
+    // a captain may have signed this phone out while it slept
+    const onVisible = () => { if (!document.hidden) start() }
     document.addEventListener('visibilitychange', onVisible)
     return () => {
       supabase.removeChannel(ch)
       document.removeEventListener('visibilitychange', onVisible)
       clearTimeout(reloadTimer.current)
     }
-  }, [load, scheduleLoad, loadPractice])
+  }, [signedIn, start, scheduleLoad, loadPractice])
 
   const me = useMemo(() => players.find((p) => p.id === myId) || null, [players, myId])
+  const isCaptain = !!me?.is_captain
 
-  const chooseMe = useCallback((id) => { setMyId(id); setMyIdState(id) }, [])
+  // ---- signing in ----
+  // Every phone gets a Supabase anonymous session; an invite link or the
+  // player's phone number and PIN ties that session to them (usta_link_device).
+  const ensureSession = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (session) return
+    const { error: e } = await supabase.auth.signInAnonymously()
+    if (e) throw new Error(/disabled/i.test(e.message) ? "Sign-in isn't switched on yet. Tell a captain." : e.message)
+  }, [])
+
+  // Resolves to usta_pin_sign_in's answer: { ok } or { ok: false, reason }.
+  const signIn = useCallback(async (phone, pin) => {
+    await ensureSession()
+    const { data, error: e } = await supabase.rpc('usta_pin_sign_in', { p_phone: phone, p_pin: pin })
+    if (e) throw new Error(e.message)
+    if (data.ok) {
+      setWho({ player_id: data.player_id, has_pin: data.has_pin })
+      await Promise.all([load(), loadPractice()])
+    }
+    return data
+  }, [ensureSession, load, loadPractice])
+
+  const join = useCallback(async (token) => {
+    await ensureSession()
+    const { data, error: e } = await supabase.rpc('usta_redeem_invite', { p_token: token })
+    if (e) throw new Error(e.message)
+    setWho(data)
+    await Promise.all([load(), loadPractice()])
+    return data
+  }, [ensureSession, load, loadPractice])
+
+  const setPin = useCallback(async (pin, current) => {
+    const { error: e } = await supabase.rpc('usta_set_pin', { p_pin: pin, p_current_pin: current || null })
+    if (e) throw new Error(e.message)
+    setWho((w) => w && { ...w, has_pin: true })
+  }, [])
+
+  // Unlinks the player but keeps the anonymous session, so signing back in on
+  // this phone doesn't leave an orphaned one behind.
+  const signOut = useCallback(async () => {
+    const { error: e } = await supabase.rpc('usta_sign_out')
+    if (e) throw new Error(e.message)
+    setWho(null)
+    clear()
+  }, [clear])
+
+  // Loading until we know who this is, then until their season has arrived.
+  // A failed check isn't "signed out": it shows the can't-reach-the-server screen.
+  const loading = (who === undefined && !error) || (signedIn && !loaded)
 
   const setAvail = useCallback(async (matchId, playerId, status) => {
     const optimistic = { match_id: matchId, player_id: playerId, status, updated_at: new Date().toISOString() }
@@ -150,9 +232,7 @@ export function TeamProvider({ children }) {
     [lineups],
   )
 
-  // Players correct their own name and gender on the way in, same trust model as
-  // availability. Phone and Venmo changes are refused server-side without the
-  // captain passcode, so it rides along whenever this device has one.
+  // Your own details, or anyone's for a captain; the database enforces which.
   const saveProfile = useCallback(async (id, fields) => {
     const { error: e } = await supabase.rpc('usta_update_profile', {
       p_id: id,
@@ -160,83 +240,76 @@ export function TeamProvider({ children }) {
       p_phone: fields.phone ?? null,
       p_gender: fields.gender ?? null,
       p_venmo: fields.venmo ?? null,
-      p_pass: captainPass,
+      p_email: fields.email ?? null,
     })
     if (e) throw new Error(e.message)
     await load()
-  }, [captainPass, load])
+  }, [load])
 
   // ---- captain ----
-  const unlockCaptain = useCallback(async (pass) => {
-    const { data, error: e } = await supabase.rpc('usta_verify_captain', { p_pass: pass })
-    if (e) throw new Error('Could not check the password')
-    if (!data) return false
-    setCaptainPass(pass); setPassState(pass); setCaptainLocked(false)
-    return true
-  }, [])
-
-  const lockCaptain = useCallback(() => { setCaptainPass(null); setPassState(null); setCaptainLocked(true) }, [])
-
-  // Roster captains shouldn't have to type the passcode: it comes from the build
-  // settings and is still verified server-side, so a stale value just brings the
-  // prompt back. A deliberate "Lock" wins until the captain unlocks again.
-  const autoPass = import.meta.env.VITE_CAPTAIN_PASS || ''
-  const [captainPending, setCaptainPending] = useState(false)
-  useEffect(() => {
-    if (!me?.is_captain || captainPass || !autoPass || getCaptainLocked()) return
-    let cancelled = false
-    setCaptainPending(true)
-    unlockCaptain(autoPass).catch(() => false).finally(() => { if (!cancelled) setCaptainPending(false) })
-    return () => { cancelled = true }
-  }, [me, captainPass, autoPass, unlockCaptain])
+  // Captain powers come from is_captain on the roster, checked by the database
+  // on every call (usta_is_captain).
 
   // UTR ratings are for captains only. The table is unreadable from the browser;
-  // they arrive through a passcode-checked function once captain tools are
-  // unlocked, and go away again on lock.
+  // they arrive through a captain-checked function.
   const [ratings, setRatings] = useState({})
   useEffect(() => {
-    if (!captainPass) { setRatings({}); return }
+    if (!isCaptain) { setRatings({}); return }
     let cancelled = false
-    supabase.rpc('usta_captain_ratings', { p_pass: captainPass }).then(({ data, error: e }) => {
+    supabase.rpc('usta_captain_ratings').then(({ data, error: e }) => {
       if (cancelled || e) return
       const map = {}
       for (const r of data || []) map[r.player_id] = r
       setRatings(map)
     })
     return () => { cancelled = true }
-  }, [captainPass])
+  }, [isCaptain])
   const ratingOf = useCallback((pid) => ratings[pid] || null, [ratings])
 
-  const rpc = useCallback(async (fn, args) => {
-    const { data, error: e } = await supabase.rpc(fn, { p_pass: captainPass, ...args })
+  const call = useCallback(async (fn, args) => {
+    const { data, error: e } = await supabase.rpc(fn, args)
     if (e) throw new Error(e.message)
+    return data
+  }, [])
+
+  // a write the whole team sees: refetch so this phone shows it right away
+  const rpc = useCallback(async (fn, args) => {
+    const data = await call(fn, args)
     await Promise.all([load(), loadPractice()])
     return data
-  }, [captainPass, load, loadPractice])
+  }, [call, load, loadPractice])
 
   const value = {
-    players, matches, availability, lineups, loading, error, reload: load,
-    me, myId, chooseMe, setAvail, availOf, lineupFor, saveProfile,
+    players, matches, availability, lineups, loading, error, reload: start,
+    who, me, myId, signIn, join, setPin, signOut,
+    setAvail, availOf, lineupFor, saveProfile,
     practices, signups, courtReports, practiceError, setSignup, reportLights,
-    isCaptain: !!captainPass, captainPending, unlockCaptain, lockCaptain, ratingOf,
+    isCaptain, ratingOf,
     saveLineup: (matchId, courts) => rpc('usta_save_lineup', { p_match_id: matchId, p_courts: courts }),
     saveResults: (matchId, results) => rpc('usta_save_results', { p_match_id: matchId, p_results: results }),
     publishLineup: (matchId, published) => rpc('usta_publish_lineup', { p_match_id: matchId, p_published: published }),
     updateMatch: (matchId, startsAt, site, notes) =>
       rpc('usta_update_match', { p_match_id: matchId, p_starts_at: startsAt, p_site: site, p_notes: notes }),
+    // Resolves to the new player's id.
     addPlayer: (fields) => rpc('usta_upsert_player', {
       p_id: null, p_name: fields.name, p_gender: fields.gender,
       p_ntrp: fields.ntrp ?? null, p_phone: fields.phone || null, p_active: true,
       p_usta_number: fields.ustaNumber || null,
     }),
+    // Resolves to the token; the link is inviteLink(token).
+    createInvite: (playerId) => call('usta_create_invite', { p_player_id: playerId }),
+    rosterAccess: () => call('usta_roster_access'),
+    unlockPin: (playerId) => call('usta_unlock_pin', { p_player_id: playerId }),
+    signOutPlayer: (playerId) => call('usta_sign_out_player', { p_player_id: playerId }),
+    setCaptain: (playerId, on) => rpc('usta_set_captain', { p_player_id: playerId, p_on: on }),
     // Anyone can post a practice; the database lets its poster or a captain
     // change it. Resolves to the practice id.
     savePractice: (id, f) => rpc('usta_save_practice', {
-      p_player_id: myId, p_id: id, p_starts_at: f.startsAt, p_minutes: f.minutes, p_site: f.site,
+      p_id: id, p_starts_at: f.startsAt, p_minutes: f.minutes, p_site: f.site,
       p_courts: f.courts ?? null, p_notes: f.notes || null,
     }),
-    cancelPractice: (id, cancelled) => rpc('usta_cancel_practice', { p_player_id: myId, p_id: id, p_cancelled: cancelled }),
-    deletePractice: (id) => rpc('usta_delete_practice', { p_player_id: myId, p_id: id }),
+    cancelPractice: (id, cancelled) => rpc('usta_cancel_practice', { p_id: id, p_cancelled: cancelled }),
+    deletePractice: (id) => rpc('usta_delete_practice', { p_id: id }),
   }
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

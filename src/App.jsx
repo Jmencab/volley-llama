@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { TeamProvider, useTeam } from './lib/store'
-import { consumeUrlKey, getTeamOk } from './lib/identity'
+import { dropOldKey, takeInviteToken } from './lib/identity'
 import { slideDirection } from './lib/nav'
-import NameGate from './components/NameGate'
 import TabBar from './components/TabBar'
-import TeamGate from './components/TeamGate'
+import SignIn from './components/SignIn'
+import Join from './components/Join'
+import { PinScreen } from './components/PinForm'
 import CaptainGate from './components/CaptainGate'
 import Splash, { PLAY_SPLASH } from './components/Splash'
 import Home from './pages/Home'
@@ -16,14 +17,14 @@ import Team from './pages/Team'
 import Captain from './pages/Captain'
 import CaptainMatch from './pages/CaptainMatch'
 
-// Consume ?key=... before anything renders, so an unlocked link never flashes
-// the password screen.
-consumeUrlKey()
+// Before anything renders: the invite token comes out of the address bar
+// exactly once, however many times React mounts things.
+dropOldKey()
+const INVITE = takeInviteToken()
 
 function Shell() {
-  const { loading, error, players, me, reload } = useTeam()
+  const { loading, error, players, who, me, reload } = useTeam()
   const location = useLocation()
-  const [teamOk, setTeamOkState] = useState(getTeamOk)
 
   // remember where we came from so the next page can slide in from that side
   const [trail, setTrail] = useState({ path: location.pathname, dir: '' })
@@ -33,7 +34,8 @@ function Shell() {
 
   useEffect(() => { window.scrollTo(0, 0) }, [location.pathname])
 
-  if (!teamOk) return <TeamGate onUnlock={() => setTeamOkState(true)} />
+  // an invite link works whether or not this phone is signed in
+  if (location.pathname === '/join') return <Join token={INVITE} />
 
   if (loading) {
     return (
@@ -47,6 +49,8 @@ function Shell() {
     )
   }
 
+  if (who === null) return <SignIn />
+
   if (error && players.length === 0) {
     return (
       <div className="app center" style={{ paddingTop: '33vh' }}>
@@ -58,7 +62,10 @@ function Shell() {
     )
   }
 
-  if (!me) return <NameGate />
+  if (who && !who.has_pin) return <PinScreen />
+
+  // a brief gap between signing in and the roster arriving
+  if (!me) return null
 
   return (
     <>

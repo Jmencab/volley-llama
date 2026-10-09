@@ -9,10 +9,7 @@ const Tab = ({ to, glyph, label, end }) => (
 )
 
 export default function TabBar() {
-  // the tab shows for anyone unlocked OR anyone signed in as a roster captain —
-  // the latter still meet the passcode on first tap
-  const { isCaptain, me } = useTeam()
-  const showCaptain = isCaptain || me?.is_captain
+  const { isCaptain } = useTeam()
   return (
     <nav className="tabs">
       <div className="tabs-inner">
@@ -20,7 +17,7 @@ export default function TabBar() {
         <Tab to="/schedule" glyph="📅" label="SCHEDULE" />
         <Tab to="/practice" glyph="🏃" label="PRACTICE" />
         <Tab to="/team" glyph="🦙" label="STATS" />
-        {showCaptain && <Tab to="/captain" glyph="📋" label="CAPTAIN" />}
+        {isCaptain && <Tab to="/captain" glyph="📋" label="CAPTAIN" />}
       </div>
     </nav>
   )

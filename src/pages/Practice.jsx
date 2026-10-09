@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useTeam, useNow } from '../lib/store'
-import { teamLink } from '../lib/identity'
+import { appLink } from '../lib/identity'
 import { Avatar, DateChip, Sheet, Toast, copyText, displayName, firstName, mapsUrl } from '../components/ui'
 import CourtFinder from '../components/CourtFinder'
 import { dayName, monthDay, pacificOffset, relativeShort, timeOf, timeRange, toLocalInput } from '../lib/dates'
@@ -404,7 +404,7 @@ function shareText(p, court, roster, nameOf) {
     '',
     inSoFar.length ? `In so far: ${inSoFar.join(', ')}` : null,
     [hc.count, hc.suggest].filter(Boolean).join('. '),
-    `Sign up: ${teamLink(`/practice?p=${p.id}`)}`,
+    `Sign up: ${appLink(`/practice?p=${p.id}`)}`,
   ].filter((line) => line !== null).join('\n')
 }
 
