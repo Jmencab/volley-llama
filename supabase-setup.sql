@@ -101,8 +101,10 @@ create unique index if not exists usta_players_phone_key on public.usta_players(
 -- ============================ 3. who is signed in ============================
 -- No passwords to remember beyond an 8-digit PIN. Each phone gets a Supabase
 -- anonymous session (that's what "Allow anonymous sign-ins" is for), and a row
--- here ties that session to a player. A session gets tied by opening an invite
--- link a captain sent, or by entering the player's phone number and PIN.
+-- here ties that session to a player. A session gets tied by entering the
+-- player's phone number and PIN, by opening an invite link a captain sent, or,
+-- while a team allows it, by setting up a PIN from the roster phone number
+-- (usta_sign_up, section 9).
 --
 -- Anyone can get an anonymous session with the public key, so being signed in
 -- to Supabase proves nothing. Every rule below asks usta_me() instead.
@@ -619,6 +621,21 @@ returns jsonb language sql stable security definer set search_path = public as $
   ) end;
 $$;
 
+-- The rules every PIN has to pass. Internal: usta_set_pin and usta_sign_up.
+create or replace function public.usta_check_pin(p_player_id uuid, p_pin text)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_phone text;
+begin
+  if coalesce(p_pin, '') !~ '^\d{8}$' then raise exception 'Your PIN needs to be exactly 8 digits.'; end if;
+  if p_pin ~ '^(\d)\1+$' or '0123456789012' like '%' || p_pin || '%' or '9876543210987' like '%' || p_pin || '%' then
+    raise exception 'That PIN is too easy to guess. Pick another.';
+  end if;
+  select regexp_replace(coalesce(phone, ''), '\D', '', 'g') into v_phone from public.usta_players where id = p_player_id;
+  if length(v_phone) >= 8 and right(v_phone, 8) = p_pin then
+    raise exception 'Don''t use your phone number. Everyone on the team has it.';
+  end if;
+end $$;
+
 -- An 8-digit PIN, not obvious, and not the end of the player's phone number
 -- (everyone on the team has that). Changing an existing PIN needs the current
 -- one, unless this phone came in on an invite link in the last day — that's
@@ -628,18 +645,10 @@ returns void language plpgsql security definer set search_path = public as $$
 declare
   v_me    uuid := public.usta_me();
   v_hash  text;
-  v_phone text;
   v_fresh boolean;
 begin
   if v_me is null then raise exception 'Sign in first'; end if;
-  if coalesce(p_pin, '') !~ '^\d{8}$' then raise exception 'Your PIN needs to be exactly 8 digits.'; end if;
-  if p_pin ~ '^(\d)\1+$' or '0123456789012' like '%' || p_pin || '%' or '9876543210987' like '%' || p_pin || '%' then
-    raise exception 'That PIN is too easy to guess. Pick another.';
-  end if;
-  select regexp_replace(coalesce(phone, ''), '\D', '', 'g') into v_phone from public.usta_players where id = v_me;
-  if length(v_phone) >= 8 and right(v_phone, 8) = p_pin then
-    raise exception 'Don''t use your phone number. Everyone on the team has it.';
-  end if;
+  perform public.usta_check_pin(v_me, p_pin);
 
   select pin_hash into v_hash from public.usta_player_secrets where player_id = v_me;
   select how = 'invite' and linked_at > now() - interval '1 day' into v_fresh
@@ -751,6 +760,95 @@ begin
   if not found then raise exception 'player not found'; end if;
 end $$;
 
+-- ---------- setting up without an invite ----------
+-- While the link to the app stays inside the team, nobody needs an invite: a
+-- player enters the phone number a captain put on the roster, chooses a PIN,
+-- and is in. That only works for a player who has no PIN yet, so it can't take
+-- over anyone already set up. If someone sets up as the wrong person, a
+-- captain's invite link lets the real one choose a new PIN, and "Sign out of
+-- all phones" removes the other phone. Once the link might travel further
+-- (a new team, say), a captain turns this off in the app: invite links only.
+create table if not exists public.usta_settings (
+  id           int primary key default 1 check (id = 1),
+  open_sign_up boolean not null default true
+);
+insert into public.usta_settings (id) values (1) on conflict do nothing;
+alter table public.usta_settings enable row level security;
+revoke all on public.usta_settings from public, anon, authenticated;
+
+create or replace function public.usta_open_sign_up()
+returns boolean language sql stable security definer set search_path = public as $$
+  select coalesce((select open_sign_up from public.usta_settings where id = 1), false);
+$$;
+
+create or replace function public.usta_set_open_sign_up(p_on boolean)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.usta_is_captain() then raise exception 'Captains only'; end if;
+  insert into public.usta_settings (id, open_sign_up) values (1, coalesce(p_on, false))
+  on conflict (id) do update set open_sign_up = excluded.open_sign_up;
+end $$;
+
+-- Step one: is this number on the roster, and still without a PIN?
+-- {"status": "new", "name": ...}, or "has_pin", "nomatch", "closed".
+create or replace function public.usta_sign_up_check(p_phone text)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare
+  v_phone text;
+  v_name  text;
+  v_has   boolean;
+begin
+  if not public.usta_open_sign_up() then return jsonb_build_object('status', 'closed'); end if;
+  begin
+    v_phone := public.usta_norm_phone(p_phone);
+  exception when others then
+    return jsonb_build_object('status', 'nomatch');
+  end;
+  select coalesce(nullif(btrim(p.preferred_name), ''), p.name), s.pin_hash is not null
+    into v_name, v_has
+    from public.usta_players p
+    left join public.usta_player_secrets s on s.player_id = p.id
+   where p.phone = v_phone and p.active;
+  if v_name is null then return jsonb_build_object('status', 'nomatch'); end if;
+  if v_has then return jsonb_build_object('status', 'has_pin'); end if;
+  return jsonb_build_object('status', 'new', 'name', v_name);
+end $$;
+
+-- Step two: choose the PIN and sign this phone in, in one go, so there's never
+-- a signed-in phone without a PIN behind it.
+create or replace function public.usta_sign_up(p_phone text, p_pin text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_phone text;
+  v_id    uuid;
+begin
+  if not public.usta_open_sign_up() then
+    raise exception 'To join, open the invite link your captain sent you.';
+  end if;
+  begin
+    v_phone := public.usta_norm_phone(p_phone);
+  exception when others then
+    v_phone := null;
+  end;
+  select id into v_id from public.usta_players where phone = v_phone and active;
+  if v_id is null then
+    raise exception 'That number isn''t on the team roster. Ask a captain to add it.';
+  end if;
+  perform public.usta_check_pin(v_id, p_pin);
+
+  -- only while there's no PIN; the row lock settles two phones racing
+  insert into public.usta_player_secrets (player_id, pin_hash)
+  values (v_id, extensions.crypt(p_pin, extensions.gen_salt('bf', 10)))
+  on conflict (player_id) do update set pin_hash = excluded.pin_hash, failed_pins = 0, locked_at = null
+   where public.usta_player_secrets.pin_hash is null;
+  if not found then
+    raise exception 'You already have a PIN. Sign in with it, or ask a captain for a link if you forgot it.';
+  end if;
+
+  perform public.usta_link_device(v_id, 'pin');
+  return public.usta_whoami();
+end $$;
+
 -- ============================ 10. function permissions ============================
 -- Functions are executable by PUBLIC by default, so revoke from PUBLIC, not
 -- just anon. Signed-in sessions get the ones the app calls; each function
@@ -783,7 +881,12 @@ revoke all on function
   public.usta_roster_access(),
   public.usta_unlock_pin(uuid),
   public.usta_sign_out_player(uuid),
-  public.usta_set_captain(uuid, boolean)
+  public.usta_set_captain(uuid, boolean),
+  public.usta_check_pin(uuid, text),
+  public.usta_open_sign_up(),
+  public.usta_set_open_sign_up(boolean),
+  public.usta_sign_up_check(text),
+  public.usta_sign_up(text, text)
 from public, anon, authenticated;
 
 -- usta_me and usta_is_captain stay executable because the read rules call them
@@ -810,5 +913,9 @@ grant execute on function
   public.usta_roster_access(),
   public.usta_unlock_pin(uuid),
   public.usta_sign_out_player(uuid),
-  public.usta_set_captain(uuid, boolean)
+  public.usta_set_captain(uuid, boolean),
+  public.usta_open_sign_up(),
+  public.usta_set_open_sign_up(boolean),
+  public.usta_sign_up_check(text),
+  public.usta_sign_up(text, text)
 to authenticated;

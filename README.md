@@ -23,7 +23,7 @@ Built with React + Vite, Supabase, and Netlify.
 - **Schedule**: every match with time, site, and home/away. Answer *Available / Maybe / Out* right from the list.
 - **Practice**: anyone can post a practice and share it to the team's WhatsApp group with the court, a map link, and a sign-up link. There's no sign-up limit: the app shows the count against the ideal of four per court (e.g. *5/4 signed up*) and suggests booking another court when it's over. There's also a court finder for Seattle courts, with which ones have lights and whether a teammate says the lights actually worked last time.
 - **Stats**: team record, results by court, a player leaderboard, best partnerships, and each player's match log.
-- Sign in once per phone with the invite link your captain sends, then choose an 8-digit PIN. On a new phone, sign in with your phone number and PIN. Update your details any time from **Stats → Edit my details**.
+- Sign in once per phone: tap **First time here?**, enter the phone number the captains have for you, and choose an 8-digit PIN (or open the invite link a captain sent). After that, your phone number and PIN sign you in on any phone. Update your details any time from **Stats → Edit my details**.
 
 **For captains**
 
@@ -49,8 +49,8 @@ The Supabase values aren't in the repository; ask Kevin for them. Git ignores
 
 Vite prints the local URL (usually http://localhost:5173). The first screen asks
 for your phone number and PIN. Sessions belong to the site's address, so
-localhost needs its own sign-in: ask a captain for an invite link and change
-its start to `http://localhost:5173`.
+localhost needs its own sign-in: use your phone number and PIN, or ask a
+captain for an invite link and change its start to `http://localhost:5173`.
 
 | Command | What it does |
 |---|---|
@@ -112,15 +112,16 @@ already knows everyone on the team:
 
 | Step | What happens | Where it lives |
 |---|---|---|
+| **First time** | While a team allows it (on by default), a player taps *First time here?*, enters the phone number on the roster, and chooses a PIN. This only works for a player with no PIN yet, so it can't take over anyone already set up. Anyone who has the app's address can try it, so a captain turns it off once that address might reach people outside the team. | `usta_settings`, `usta_sign_up` |
 | **Invite link** | A captain sends each player a personal link (`/join#t=…`) from the roster, by WhatsApp or text. Opening it signs that phone in. It works once and expires after 7 days. | `usta_invites` (token hashes only), `usta_create_invite` |
-| **PIN** | Right after the link, the player chooses an 8-digit PIN. The database refuses easy ones and the last 8 digits of their own phone number. | `usta_player_secrets` (bcrypt), `usta_set_pin` |
+| **PIN** | Right after the link (or as part of *First time*), the player chooses an 8-digit PIN. The database refuses easy ones and the last 8 digits of their own phone number. | `usta_player_secrets` (bcrypt), `usta_set_pin` |
 | **Phone + PIN** | Signs in on any other phone, or after iOS clears the site. Ten wrong tries lock the PIN until a captain unlocks it or sends a new link. | `usta_pin_sign_in` |
 | **Captain** | Whoever has `is_captain` on the roster. The database checks it on every captain action. | `usta_is_captain()` |
 
 How it works underneath: each phone gets a Supabase *anonymous session*,
 which any visitor can get. Being signed in to Supabase therefore proves
 nothing on its own. A row in `usta_player_devices` ties a session to a player
-once an invite or PIN checks out, and every rule asks `usta_me()`, which reads
+once an invite or PIN checks out (or a first-time PIN is set), and every rule asks `usta_me()`, which reads
 that table. Someone who isn't tied to a player can't read anything.
 
 - Players change only their own availability, sign-ups, lights reports, and
@@ -146,6 +147,7 @@ Everything lives in Supabase, in tables prefixed `usta_`.
 | `usta_player_devices` | Which sessions (phones) are signed in as which player (no browser access) |
 | `usta_player_secrets` | PIN hashes and wrong-try counts (no browser access) |
 | `usta_invites` | Hashes of invite tokens, with expiry and when used (no browser access) |
+| `usta_settings` | One row of team settings: `open_sign_up` (no browser access) |
 
 - **Every statistic comes from `usta_lineups`**: play counts, records, partnerships,
   and court history. Entering scores after each match is the only upkeep. A lineup
@@ -244,8 +246,8 @@ button removes a captain. The team always keeps at least one captain
 (`usta_set_captain` refuses to remove the last).
 
 **Invite a player, or let them back in.** Captain → **Roster** shows where each
-player stands: *Not invited*, *Invited*, *Signed in*, *Signed out*, *PIN locked*,
-or *No phone*. Tap a player to:
+player stands: *Not set up* (or *Not invited* once sign-up is off), *Invited*,
+*Signed in*, *Signed out*, *PIN locked*, or *No phone*. Tap a player to:
 
 - **Send invite link.** Opens WhatsApp or Messages straight to them with the
   link filled in. The same button sends a new link when someone forgets their
@@ -253,6 +255,14 @@ or *No phone*. Tap a player to:
 - **Unlock PIN** after ten wrong tries.
 - **Edit details**: name, phone, email, Venmo.
 - **Sign out of all phones** for a lost phone. Their PIN still works.
+
+**Open sign-up or invites only.** Under the roster, the box *Players on the
+roster can set up with their phone number* is on by default: nobody needs an
+invite, just their number on the roster. Untick it when the app's address
+might reach people outside the team (a new team, say), and it's invite links
+only. If someone sets up as the wrong person, send the real player an invite
+link (it lets them choose a new PIN) and use **Sign out of all phones** on them
+first.
 
 **The first captain** on a new project has nobody to invite them. Run this in
 the Supabase SQL editor and open `https://<site>/join#t=<the result>`:
@@ -287,8 +297,10 @@ working as soon as the database is updated, so do these together:
    update public.usta_players set is_captain = name in ('Julio Mendez', 'Kevin Jeyakumar');
    ```
 4. Deploy the new build.
-5. Run `select public.usta_admin_invite('<your roster name>');` and open your link.
-6. From Captain → Roster, give anyone marked *No phone* a number, then send everyone their invite.
+5. Open the site, tap **First time here?**, and set up your own PIN. Then from
+   Captain → Roster, give anyone marked *No phone* a number: it's how they sign in.
+6. Tell the team: open the usual address, tap **First time here?**, enter your
+   phone number, and choose a PIN. No invites needed while sign-up is open.
 
 ## Deploying
 

@@ -9,7 +9,7 @@ import { inviteLink } from '../lib/identity'
 import { formatPhone, smsLink, whatsappLink } from '../lib/phone'
 
 export default function Captain() {
-  const { matches, players, lineups, availOf, lineupFor, addPlayer, rosterAccess } = useTeam()
+  const { matches, players, lineups, availOf, lineupFor, addPlayer, rosterAccess, openSignUp, setOpenSignUp } = useTeam()
   const now = useNow()
   const stats = useMemo(() => buildStats({ matches, lineups, now }), [matches, lineups, now])
   const [adding, setAdding] = useState(false)
@@ -30,6 +30,17 @@ export default function Captain() {
       .catch(() => {})
   }, [rosterAccess])
   useEffect(() => { refreshAccess() }, [refreshAccess])
+
+  // whether a player can set up from the roster phone number without an invite
+  const [open, setOpen] = useState(null)
+  useEffect(() => { openSignUp().then(setOpen, () => {}) }, [openSignUp])
+  const toggleOpen = async (on) => {
+    setOpen(on)
+    try {
+      await setOpenSignUp(on)
+      setToast(on ? 'Players can set up with their phone number' : 'Invite links only')
+    } catch (e) { setOpen(!on); setToast(e.message) }
+  }
 
   const active = players.filter((p) => p.active)
   const upcoming = matches.filter((m) => !isPastMatch(m, now))
@@ -72,7 +83,7 @@ export default function Captain() {
       <div className="section"><h2 className="h2">Roster</h2><span className="tiny">tap to invite or edit</span></div>
       <div className="card" style={{ padding: 6 }}>
         {active.map((p) => {
-          const st = accessStatus(p, access[p.id])
+          const st = accessStatus(p, access[p.id], open)
           return (
             <button key={p.id} className="pickrow" onClick={() => setManaging(p.id)}>
               <Avatar player={p} />
@@ -86,6 +97,15 @@ export default function Captain() {
         })}
       </div>
       <button className="btn wide mt" onClick={() => setAdding(true)}>Add player</button>
+      {open !== null && (
+        <label className="row mt" style={{ gap: 8, alignItems: 'flex-start' }}>
+          <input type="checkbox" checked={open} onChange={(e) => toggleOpen(e.target.checked)} style={{ marginTop: 3 }} />
+          <span className="sub" style={{ margin: 0 }}>
+            Players on the roster can set up with their phone number, no invite needed.
+            Turn this off if the app's link might reach people outside the team.
+          </span>
+        </label>
+      )}
 
       <div className="section"><h2 className="h2">Coming up</h2></div>
       <div className="stack stagger">
@@ -220,14 +240,15 @@ export default function Captain() {
 }
 
 // One chip per roster row: the thing the captain might need to act on.
-function accessStatus(p, a) {
+// openSignUp: players can set up without an invite, so "not invited" isn't news.
+function accessStatus(p, a, openSignUp) {
   if (!p.phone) return { label: 'No phone', tone: 'out' }
   if (!a) return { label: '…', tone: '' }
   if (a.locked) return { label: 'PIN locked', tone: 'out' }
   if (a.devices > 0) return { label: 'Signed in', tone: 'available' }
   if (a.has_pin) return { label: 'Signed out', tone: '' }
   if (a.invite_expires) return { label: 'Invited', tone: 'maybe' }
-  return { label: 'Not invited', tone: 'maybe' }
+  return { label: openSignUp ? 'Not set up' : 'Not invited', tone: 'maybe' }
 }
 
 function PlayerAccessSheet({ player, access: a, onChanged, setToast, onClose }) {

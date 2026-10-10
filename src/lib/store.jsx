@@ -165,6 +165,24 @@ export function TeamProvider({ children }) {
     return data
   }, [ensureSession, load, loadPractice])
 
+  // Setting up without an invite, while the team allows it (usta_sign_up).
+  // checkSignUp resolves to { status: 'new', name } | has_pin | nomatch | closed.
+  const checkSignUp = useCallback(async (phone) => {
+    await ensureSession()
+    const { data, error: e } = await supabase.rpc('usta_sign_up_check', { p_phone: phone })
+    if (e) throw new Error(e.message)
+    return data
+  }, [ensureSession])
+
+  const signUp = useCallback(async (phone, pin) => {
+    await ensureSession()
+    const { data, error: e } = await supabase.rpc('usta_sign_up', { p_phone: phone, p_pin: pin })
+    if (e) throw new Error(e.message)
+    setWho(data)
+    await Promise.all([load(), loadPractice()])
+    return data
+  }, [ensureSession, load, loadPractice])
+
   const join = useCallback(async (token) => {
     await ensureSession()
     const { data, error: e } = await supabase.rpc('usta_redeem_invite', { p_token: token })
@@ -272,6 +290,8 @@ export function TeamProvider({ children }) {
     return data
   }, [])
 
+  const openSignUp = useCallback(() => call('usta_open_sign_up'), [call])
+
   // a write the whole team sees: refetch so this phone shows it right away
   const rpc = useCallback(async (fn, args) => {
     const data = await call(fn, args)
@@ -281,7 +301,7 @@ export function TeamProvider({ children }) {
 
   const value = {
     players, matches, availability, lineups, loading, error, reload: start,
-    who, me, myId, signIn, join, setPin, signOut,
+    who, me, myId, signIn, checkSignUp, signUp, join, setPin, signOut,
     setAvail, availOf, lineupFor, saveProfile,
     practices, signups, courtReports, practiceError, setSignup, reportLights,
     isCaptain, ratingOf,
@@ -302,6 +322,8 @@ export function TeamProvider({ children }) {
     unlockPin: (playerId) => call('usta_unlock_pin', { p_player_id: playerId }),
     signOutPlayer: (playerId) => call('usta_sign_out_player', { p_player_id: playerId }),
     setCaptain: (playerId, on) => rpc('usta_set_captain', { p_player_id: playerId, p_on: on }),
+    openSignUp,
+    setOpenSignUp: (on) => call('usta_set_open_sign_up', { p_on: on }),
     // Anyone can post a practice; the database lets its poster or a captain
     // change it. Resolves to the practice id.
     savePractice: (id, f) => rpc('usta_save_practice', {
